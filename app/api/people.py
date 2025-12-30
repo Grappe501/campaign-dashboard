@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException
@@ -100,6 +101,60 @@ class PersonReplace(BaseModel):
     allow_leaderboard: bool = True
 
 
+class DiscordUpsert(BaseModel):
+    """
+    Discord-first identity upsert. This is the backbone of onboarding.
+    """
+    discord_user_id: str = PydField(..., min_length=3)
+    name: str = PydField(..., min_length=1)
+
+    # Optional enrichment
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+
+    # Optional: link recruit source
+    recruited_by_person_id: Optional[int] = None
+
+    # Optional geo
+    region: Optional[str] = None
+    county: Optional[str] = None
+    city: Optional[str] = None
+    precinct: Optional[str] = None
+
+    # Optional Discord context (for sync hardening / audit)
+    guild_id: Optional[str] = None
+    channel_id: Optional[str] = None
+    username: Optional[str] = None
+
+
+class OnboardRequest(BaseModel):
+    """
+    Mark a person as onboarded + return next-step suggestions.
+    """
+    person_id: Optional[int] = None
+    discord_user_id: Optional[str] = None
+
+    # Optional Discord context (for sync hardening / audit)
+    guild_id: Optional[str] = None
+    channel_id: Optional[str] = None
+    username: Optional[str] = None
+
+    # Optional enrichment
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    county: Optional[str] = None
+    city: Optional[str] = None
+
+    # Consent flags (optional)
+    allow_discord_comms: Optional[bool] = None
+    allow_tracking: Optional[bool] = None
+
+
+class OnboardResponse(BaseModel):
+    person: Dict[str, Any]
+    next_steps: List[str]
+
+
 # -----------------------------
 # Guardrails / normalization
 # -----------------------------
@@ -137,6 +192,71 @@ def _normalize_stage(stage: Optional[VolunteerStage]) -> VolunteerStage:
     Defensive helper so we always work with a real enum member.
     """
     return stage or VolunteerStage.OBSERVER
+
+
+def _ensure_tracking_number(seed: str) -> str:
+    """
+    Lightweight TN for discord-first creation.
+    Example: TN-20251229-123456 (suffix = last 6 chars of discord id)
+    """
+    suffix = (seed or "000000")[-6:]
+    return f"TN-{utcnow().strftime('%Y%m%d')}-{suffix}"
+
+
+def _person_to_dict(p: Person) -> Dict[str, Any]:
+    try:
+        return p.model_dump()
+    except Exception:
+        # safe minimal fallback
+        return {
+            "id": p.id,
+            "tracking_number": p.tracking_number,
+            "name": p.name,
+            "email": p.email,
+            "phone": p.phone,
+            "discord_user_id": p.discord_user_id,
+            "stage": str(p.stage) if getattr(p, "stage", None) is not None else None,
+            "stage_locked": bool(getattr(p, "stage_locked", False)),
+            "onboarded_at": getattr(p, "onboarded_at", None),
+            "team_access": bool(getattr(p, "team_access", False)),
+            "fundraising_access": bool(getattr(p, "fundraising_access", False)),
+            "is_admin": bool(getattr(p, "is_admin", False)),
+            "county": getattr(p, "county", None),
+            "city": getattr(p, "city", None),
+        }
+
+
+def _next_steps_for_person(p: Person) -> List[str]:
+    """
+    Onboarding "doesn't go anywhere" fix:
+    give concrete next actions based on stage + access flags.
+    """
+    steps: List[str] = []
+
+    # baseline: first action + community
+    if p.stage in (VolunteerStage.OBSERVER, VolunteerStage.NEW):
+        steps.append("Do one small action today (call/text/door/share) and log it as a win.")
+        steps.append("Post an intro: your county + 1 way you can help this week.")
+        steps.append("Ask your recruiter for a Power of 5 invite (or request one from a lead).")
+        return steps
+
+    if p.stage == VolunteerStage.ACTIVE:
+        steps.append("Log one more action today and invite 1 friend to take an action with you.")
+    if p.stage == VolunteerStage.OWNER:
+        steps.append("Pick a lane for this week and bring 1 new person into the hub.")
+
+    # gated capabilities (app-side permissions; Discord can mirror)
+    if getattr(p, "team_access", False) and p.stage in (VolunteerStage.TEAM, VolunteerStage.LEADER, VolunteerStage.ADMIN):
+        steps.append("Coordinate in your team lane and post daily wins.")
+    else:
+        steps.append("If you need deeper access, request TEAM access (human-approved).")
+
+    if getattr(p, "fundraising_access", False):
+        steps.append("Follow your fundraising lane plan and log each touch as an action.")
+    else:
+        steps.append("If you will help with fundraising, request FUNDRAISING access (human-approved).")
+
+    return steps
 
 
 # -----------------------------
@@ -187,6 +307,145 @@ def create_person(payload: PersonCreate) -> Person:
         session.commit()
         session.refresh(person)
         return person
+
+
+@router.post("/discord/upsert", response_model=Person)
+def upsert_from_discord(payload: DiscordUpsert) -> Person:
+    """
+    Discord-first: create or update a person by discord_user_id.
+
+    This is the foundation of onboarding, because Discord users
+    should not have to know a person_id or tracking_number.
+    """
+    with get_session() as session:
+        p = session.exec(select(Person).where(Person.discord_user_id == payload.discord_user_id)).first()
+
+        if not p:
+            p = Person(
+                tracking_number=_ensure_tracking_number(payload.discord_user_id),
+                name=payload.name,
+                email=str(payload.email) if payload.email else None,
+                phone=payload.phone,
+                discord_user_id=payload.discord_user_id,
+                stage=VolunteerStage.NEW,
+                stage_locked=False,
+                stage_last_changed_at=utcnow(),
+                stage_changed_reason="auto:create_from_discord",
+                region=payload.region,
+                county=payload.county,
+                city=payload.city,
+                precinct=payload.precinct,
+                recruited_by_person_id=payload.recruited_by_person_id,
+            )
+        else:
+            # Update basics (do not alter stage here)
+            if payload.name:
+                p.name = payload.name
+            if payload.email is not None:
+                p.email = str(payload.email) if payload.email else None
+            if payload.phone is not None:
+                p.phone = payload.phone
+
+            if payload.region is not None:
+                p.region = payload.region
+            if payload.county is not None:
+                p.county = payload.county
+            if payload.city is not None:
+                p.city = payload.city
+            if payload.precinct is not None:
+                p.precinct = payload.precinct
+
+            if payload.recruited_by_person_id is not None:
+                p.recruited_by_person_id = payload.recruited_by_person_id
+
+        # Discord sync hardening: capture "last seen" context if model supports it
+        try:
+            p.note_discord_seen(
+                guild_id=payload.guild_id,
+                channel_id=payload.channel_id,
+                username=payload.username,
+            )
+        except Exception:
+            pass
+
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        return p
+
+
+@router.post("/onboard", response_model=OnboardResponse)
+def onboard(payload: OnboardRequest) -> OnboardResponse:
+    """
+    Mark a person as onboarded and return next-step guidance.
+
+    Accepts either:
+    - person_id
+    - discord_user_id (Discord-first)
+
+    Behavior:
+    - sets onboarded_at if missing
+    - optionally updates email/phone/county/city/consent flags
+    - if stage is OBSERVER, promotes to NEW (safe) unless stage_locked
+    - records "last seen" discord context when provided
+    """
+    with get_session() as session:
+        p: Optional[Person] = None
+        if payload.person_id is not None:
+            p = session.get(Person, payload.person_id)
+        elif payload.discord_user_id:
+            p = session.exec(select(Person).where(Person.discord_user_id == payload.discord_user_id)).first()
+
+        if not p:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # enrichment
+        if payload.email is not None:
+            p.email = str(payload.email) if payload.email else None
+        if payload.phone is not None:
+            p.phone = payload.phone
+        if payload.county is not None:
+            p.county = payload.county
+        if payload.city is not None:
+            p.city = payload.city
+
+        if payload.allow_discord_comms is not None:
+            p.allow_discord_comms = payload.allow_discord_comms
+        if payload.allow_tracking is not None:
+            p.allow_tracking = payload.allow_tracking
+
+        # mark onboarded
+        try:
+            p.mark_onboarded()
+        except Exception:
+            pass
+
+        # record discord "last seen" (optional)
+        try:
+            p.note_discord_seen(
+                guild_id=payload.guild_id,
+                channel_id=payload.channel_id,
+                username=payload.username,
+            )
+        except Exception:
+            pass
+
+        # If they're still OBSERVER and not locked, move to NEW (safe)
+        if p.stage == VolunteerStage.OBSERVER and not bool(getattr(p, "stage_locked", False)):
+            apply_stage_change(
+                session=session,
+                person=p,
+                new_stage=VolunteerStage.NEW,
+                reason="onboard:observer->new",
+                lock_stage=False,
+            )
+            # apply_stage_change already committed/refreshed
+            return OnboardResponse(person=_person_to_dict(p), next_steps=_next_steps_for_person(p))
+
+        session.add(p)
+        session.commit()
+        session.refresh(p)
+        return OnboardResponse(person=_person_to_dict(p), next_steps=_next_steps_for_person(p))
 
 
 @router.get("/", response_model=List[Person])

@@ -13,12 +13,17 @@ from ..models.impact_action import ImpactAction, ActionSource, ActionChannel
 from ..models.impact_rule import ImpactRule
 from ..models.impact_reach_snapshot import ImpactReachSnapshot
 from ..models.person import Person, VolunteerStage
-from ..services.stage_engine import PersonImpactStats, evaluate_auto_promotion, apply_stage_change
+from ..services.stage_engine import (
+    PersonImpactStats,
+    evaluate_stage_change_from_impact,
+    apply_stage_change,
+)
 
 router = APIRouter(prefix="/impact", tags=["impact"])
 
 
 def utcnow() -> datetime:
+    # Keep UTC-aware now for API payloads
     return datetime.now(timezone.utc)
 
 
@@ -101,11 +106,12 @@ _GATED_STAGES = {
     VolunteerStage.TEAM,
     VolunteerStage.FUNDRAISING,
     VolunteerStage.LEADER,
-    VolunteerStage.ADMIN,
+    # Keep ADMIN gated (if your enum contains it). If not, no harm.
+    getattr(VolunteerStage, "ADMIN", VolunteerStage.LEADER),
 }
 
 
-def _get_actor_action_count(session, actor_person_id: int) -> int:
+def _get_actor_action_row_count(session, actor_person_id: int) -> int:
     """
     Count total ImpactAction rows for this actor.
     Note: this is "rows", not "quantity sum". That's intentional for early arc gating.
@@ -160,23 +166,23 @@ def _try_auto_promote_actor(session, actor_person_id: Optional[int]) -> Tuple[Op
     cur_stage_str = str(cur_stage)
 
     try:
-        total = _get_actor_action_count(session, actor_person_id)
-        next_stage = evaluate_auto_promotion(person, PersonImpactStats(actions_total=total))
-        if not next_stage:
+        total_rows = _get_actor_action_row_count(session, actor_person_id)
+        decision = evaluate_stage_change_from_impact(person, PersonImpactStats(actions_total=total_rows))
+        if not decision.should_change or not decision.new_stage:
             return None, cur_stage_str
 
         # Belt/suspenders: never promote into gated stages here
-        if next_stage in _GATED_STAGES:
+        if decision.new_stage in _GATED_STAGES:
             return None, cur_stage_str
 
         apply_stage_change(
             session=session,
             person=person,
-            new_stage=next_stage,
-            reason=f"auto:{cur_stage_str}->{str(next_stage)}",
+            new_stage=decision.new_stage,
+            reason=decision.reason or f"auto:{cur_stage_str}->{str(decision.new_stage)}",
             lock_stage=False,
         )
-        return str(next_stage), _safe_stage_str(person)
+        return str(decision.new_stage), _safe_stage_str(person)
     except Exception:
         # Do not block action logging if promotion fails
         try:
@@ -190,6 +196,18 @@ def _try_auto_promote_actor(session, actor_person_id: Optional[int]) -> Tuple[Op
 # Actions
 # -----------------------------
 
+def _clamp_quantity(q: Any) -> int:
+    try:
+        qty = int(q or 1)
+    except Exception:
+        qty = 1
+    if qty < 1:
+        qty = 1
+    if qty > 10000:
+        qty = 10000
+    return qty
+
+
 @router.post("/actions", response_model=ImpactActionOut)
 def create_action(payload: ImpactActionCreate) -> ImpactActionOut:
     """
@@ -200,15 +218,7 @@ def create_action(payload: ImpactActionCreate) -> ImpactActionOut:
       - attempts auto stage promotion for early phases (observer/new -> active, active -> owner)
       - returns extra fields: deduped, stage_changed_to, actor_stage
     """
-    # Clamp quantity defensively
-    try:
-        qty = int(payload.quantity or 1)
-    except Exception:
-        qty = 1
-    if qty < 1:
-        qty = 1
-    if qty > 10000:
-        qty = 10000
+    qty = _clamp_quantity(payload.quantity)
 
     with get_session() as session:
         # 1) Dedupe if idempotency_key provided
@@ -217,7 +227,11 @@ def create_action(payload: ImpactActionCreate) -> ImpactActionOut:
                 select(ImpactAction).where(ImpactAction.idempotency_key == payload.idempotency_key)
             ).first()
             if existing:
-                actor_stage = _safe_stage_str(session.get(Person, existing.actor_person_id)) if existing.actor_person_id else None
+                actor_stage = (
+                    _safe_stage_str(session.get(Person, existing.actor_person_id))
+                    if existing.actor_person_id
+                    else None
+                )
                 return ImpactActionOut(
                     id=existing.id,
                     action_type=existing.action_type,

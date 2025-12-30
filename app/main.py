@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import settings
 from .database import init_db
@@ -16,17 +19,14 @@ from .api.events import router as events_router
 from .api.external import router as external_router
 from .api.counties import router as counties_router
 
-# Milestone 3 routers (Power of 5 + Impact Reach + Bootstrap + Approvals)
+# Milestone 3 routers
 from .api.power5 import router as power5_router
 from .api.impact import router as impact_router
 from .api.bootstrap import router as bootstrap_router
 from .api.approvals import router as approvals_router
 
-# Future routers (placeholders — add when ready)
-# from .api.auth import router as auth_router          # magic link onboarding, sessions
-# from .api.pipeline import router as pipeline_router  # voter pipeline skeleton
-# from .api.replication import router as repl_router   # event replication
-# from .api.discord import router as discord_router    # discord webhooks / admin ops
+# Optional Discord router (if present later)
+# from .api.discord import router as discord_router
 
 
 def create_app() -> FastAPI:
@@ -36,7 +36,7 @@ def create_app() -> FastAPI:
     )
 
     # --- CORS ---
-    # For local dev + Discord bot (server-to-server calls don’t require CORS, but UI might)
+    # For local dev + any hosted UI; Discord bot (server-to-server) doesn't need CORS.
     allow_origins = getattr(settings, "cors_allow_origins", ["*"])
     app.add_middleware(
         CORSMiddleware,
@@ -52,13 +52,27 @@ def create_app() -> FastAPI:
         # Creates tables for all registered SQLModel models (idempotent for SQLite)
         init_db()
 
+    # --- Friendly error envelope (API callers + bot) ---
+    @app.exception_handler(HTTPException)  # type: ignore[name-defined]
+    async def http_exception_handler(request, exc):  # noqa: ANN001
+        # Keep FastAPI semantics but provide a consistent JSON structure
+        try:
+            detail = exc.detail
+        except Exception:
+            detail = "HTTP error"
+        return JSONResponse(status_code=getattr(exc, "status_code", 500), content={"detail": detail})
+
     # --- Health / meta ---
     @app.get("/health", tags=["meta"])
-    def health():
-        return {"ok": True, "env": getattr(settings, "env", "local")}
+    def health() -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "env": getattr(settings, "env", "local"),
+            "api_base": os.getenv("PUBLIC_API_BASE", ""),
+        }
 
     @app.get("/version", tags=["meta"])
-    def version():
+    def version() -> Dict[str, Any]:
         return {"version": getattr(settings, "app_version", "0.3.x")}
 
     # --- API routers ---
@@ -76,9 +90,6 @@ def create_app() -> FastAPI:
     app.include_router(approvals_router)
 
     # Future milestones (uncomment when the modules exist)
-    # app.include_router(auth_router)
-    # app.include_router(pipeline_router)
-    # app.include_router(repl_router)
     # app.include_router(discord_router)
 
     return app
@@ -88,8 +99,14 @@ app = create_app()
 
 
 def run() -> None:
-    logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+    logging.basicConfig(level=getattr(logging, str(settings.log_level).upper(), logging.INFO))
     import uvicorn
 
     # NOTE: init_db is handled by the FastAPI startup hook.
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=False)
+    # reload should be True in local dev, False in prod.
+    uvicorn.run(
+        "app.main:app",
+        host=getattr(settings, "host", "127.0.0.1"),
+        port=int(getattr(settings, "port", 8000)),
+        reload=bool(getattr(settings, "reload", False)),
+    )

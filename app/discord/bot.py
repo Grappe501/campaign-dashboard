@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import Optional, Any, Dict, Tuple, List
+from typing import Optional, Any, Dict, Tuple, List, Callable
 
 import httpx
 import discord
@@ -20,6 +20,16 @@ DISCORD_GUILD_ID_RAW = os.getenv("DISCORD_GUILD_ID")
 # Where humans should post wins (routing cue; rename channel in Discord and update here if needed)
 WINS_CHANNEL_NAME = os.getenv("DASHBOARD_WINS_CHANNEL", "wins-and-updates")
 FIRST_ACTIONS_CHANNEL_NAME = os.getenv("DASHBOARD_FIRST_ACTIONS_CHANNEL", "first-actions")
+
+# Role guards (Discord-side)
+# Comma-separated role names OR role IDs. If empty, fall back to Manage Guild / Administrator permission.
+ADMIN_ROLES_RAW = os.getenv("DASHBOARD_ADMIN_ROLES", "").strip()
+LEAD_ROLES_RAW = os.getenv("DASHBOARD_LEAD_ROLES", "").strip()  # optional: e.g. "County Lead,Field Lead"
+
+# Optional public links used in onboarding responses
+ONBOARDING_URL = os.getenv("DASHBOARD_ONBOARDING_URL", "").strip()  # e.g. https://your-site/volunteer
+VOLUNTEER_FORM_URL = os.getenv("DASHBOARD_VOLUNTEER_FORM_URL", "").strip()
+DISCORD_HELP_URL = os.getenv("DASHBOARD_DISCORD_HELP_URL", "").strip()
 
 # HTTP defaults
 DEFAULT_TIMEOUT_S = float(os.getenv("DASHBOARD_HTTP_TIMEOUT", "20"))
@@ -91,27 +101,35 @@ def _wins_hint() -> str:
     return f"👉 After you take action, drop a ✅ in **#{WINS_CHANNEL_NAME}** so we can celebrate you."
 
 
+def _first_actions_hint() -> str:
+    return f"👉 Need ideas? Check **#{FIRST_ACTIONS_CHANNEL_NAME}** for your first action menu."
+
+
 def _next_step_for_stage(stage: Optional[str]) -> str:
     """
     Simple routing logic for the 7-day arc + gated stages.
     """
     s = (stage or "").lower()
     if s in ("observer", "new", ""):
-        return f"Welcome! Your first step is to do **one small action** today. {_wins_hint()}"
+        return (
+            "Welcome! Your first step is to do **one small action** today.\n"
+            f"{_first_actions_hint()}\n"
+            f"{_wins_hint()}"
+        )
     if s == "active":
-        return f"You're ACTIVE 🎉 Do one more action today (or help someone else start). {_wins_hint()}"
+        return f"You're ACTIVE 🎉 Do one more action today (or help someone else start).\n{_wins_hint()}"
     if s == "owner":
-        return f"You're OWNER-level momentum 💪 Pick a lane and help onboard 1 person this week. {_wins_hint()}"
+        return f"You're OWNER-level momentum 💪 Pick a lane and onboard 1 person this week.\n{_wins_hint()}"
 
     # gated / elevated stages
     if s == "team":
-        return f"You're TEAM-approved ✅ Coordinate with your lead and keep logging wins. {_wins_hint()}"
+        return f"You're TEAM-approved ✅ Coordinate with your lead and keep logging wins.\n{_wins_hint()}"
     if s == "fundraising":
-        return f"You're FUNDRAISING-approved 💸 Follow your fundraising lane plan and log each touch. {_wins_hint()}"
+        return f"You're FUNDRAISING-approved 💸 Follow your fundraising lane plan and log each touch.\n{_wins_hint()}"
     if s == "leader":
-        return f"You're LEADER-level ⭐ Onboard 1 person this week and keep the cadence. {_wins_hint()}"
+        return f"You're LEADER-level ⭐ Onboard 1 person this week and keep the cadence.\n{_wins_hint()}"
 
-    return f"You're in **{stage}**. Keep logging wins and supporting others. {_wins_hint()}"
+    return f"You're in **{stage}**. Keep logging wins and supporting others.\n{_wins_hint()}"
 
 
 def _clamp_quantity(qty: int) -> Tuple[int, Optional[str]]:
@@ -126,20 +144,6 @@ def _clamp_quantity(qty: int) -> Tuple[int, Optional[str]]:
     return qty, None
 
 
-def _normalize_request_type(rt: str) -> Optional[str]:
-    """
-    Accepts a few friendly variants and returns API enum values:
-      - team -> team_access
-      - fundraising -> fundraising_access
-    """
-    s = (rt or "").strip().lower()
-    if s in ("team", "team_access"):
-        return "team_access"
-    if s in ("fundraising", "fundraising_access"):
-        return "fundraising_access"
-    return None
-
-
 def _format_api_error(code: int, text: str, data: Optional[dict]) -> str:
     """
     Render an API error clearly. Prefer FastAPI {detail: "..."} if present.
@@ -150,6 +154,86 @@ def _format_api_error(code: int, text: str, data: Optional[dict]) -> str:
     if detail:
         return f"❌ Error ({code}): {detail}"
     return f"❌ Error ({code}): {_truncate(text)}"
+
+
+def _split_csv(raw: str) -> List[str]:
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.split(",")]
+    return [p for p in parts if p]
+
+
+ADMIN_ROLES: List[str] = _split_csv(ADMIN_ROLES_RAW)
+LEAD_ROLES: List[str] = _split_csv(LEAD_ROLES_RAW)
+
+
+def _member_has_any_role(member: discord.abc.User, role_specs: List[str]) -> bool:
+    """
+    Accept role names or numeric role IDs.
+    Works when interaction.user is a discord.Member (guild interaction).
+    """
+    if not role_specs:
+        return False
+    if not isinstance(member, discord.Member):
+        return False
+
+    role_ids = set()
+    role_names = set()
+    for spec in role_specs:
+        if spec.isdigit():
+            role_ids.add(int(spec))
+        else:
+            role_names.add(spec.lower())
+
+    for r in getattr(member, "roles", []) or []:
+        try:
+            if r.id in role_ids:
+                return True
+            if (r.name or "").lower() in role_names:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _is_admin(interaction: discord.Interaction) -> bool:
+    """
+    Admin guard:
+    - If ADMIN_ROLES set: require matching role
+    - Else: require guild permissions (Manage Guild or Administrator)
+    """
+    u = interaction.user
+    if ADMIN_ROLES:
+        return _member_has_any_role(u, ADMIN_ROLES)
+
+    if isinstance(u, discord.Member):
+        perms = u.guild_permissions
+        return bool(perms.administrator or perms.manage_guild)
+    return False
+
+
+def _is_lead_or_admin(interaction: discord.Interaction) -> bool:
+    if _is_admin(interaction):
+        return True
+    if LEAD_ROLES:
+        return _member_has_any_role(interaction.user, LEAD_ROLES)
+    return False
+
+
+def _guard(check_fn: Callable[[discord.Interaction], bool], fail_msg: str):
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if check_fn(interaction):
+            return True
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(fail_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(fail_msg, ephemeral=True)
+        except Exception:
+            pass
+        return False
+
+    return app_commands.check(predicate)
 
 
 async def _api_request(
@@ -184,6 +268,54 @@ async def _api_request(
     return r.status_code, text, data
 
 
+def _approval_type_from_user(rt: str) -> Optional[str]:
+    """
+    Backward compatible mapping for approvals request_type.
+
+    Accepts:
+      - team / fundraising / leader
+      - team_access / fundraising_access / leader_access
+
+    Returns canonical API value:
+      - team_access / fundraising_access / leader_access
+    """
+    s = (rt or "").strip().lower()
+    if s in ("team", "team_access"):
+        return "team_access"
+    if s in ("fundraising", "fundraising_access", "fundraise"):
+        return "fundraising_access"
+    if s in ("leader", "lead", "leader_access"):
+        return "leader_access"
+    return None
+
+
+async def _ensure_person_by_discord(
+    interaction: discord.Interaction,
+) -> Tuple[Optional[int], Optional[dict], Optional[str]]:
+    """
+    Best-effort: ensure a Person exists for this discord user via /people/discord/upsert.
+    Returns: (person_id, person_dict, error_msg_or_none)
+    """
+    if bot.api is None:
+        return None, None, "Bot API client is not initialized."
+
+    payload = {
+        "discord_user_id": str(interaction.user.id),
+        "name": interaction.user.display_name,
+    }
+    code, text, data = await _api_request(bot.api, "POST", "/people/discord/upsert", json=payload, timeout=15)
+    if code != 200 or not isinstance(data, dict):
+        return None, None, _format_api_error(code, text, data)
+
+    pid = data.get("id")
+    if isinstance(pid, int):
+        return pid, data, None
+    if isinstance(pid, str) and pid.isdigit():
+        return int(pid), data, None
+
+    return None, data, "⚠️ Upsert succeeded but returned no person id."
+
+
 # -----------------------------
 # Bot client
 # -----------------------------
@@ -213,15 +345,17 @@ class DashboardBot(discord.Client):
             )
 
         # For beta iteration: guild-only sync is MUCH faster.
-        if DISCORD_GUILD_ID:
-            guild = discord.Object(id=DISCORD_GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-        else:
-            await self.tree.sync()
+        try:
+            if DISCORD_GUILD_ID:
+                guild = discord.Object(id=DISCORD_GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+            else:
+                await self.tree.sync()
+        except Exception as e:
+            logging.exception("Slash command sync failed: %s", e)
 
     async def close(self) -> None:
-        # Close pooled httpx resources
         if self.api is not None:
             try:
                 await self.api.aclose()
@@ -241,7 +375,9 @@ bot = DashboardBot()
 @bot.tree.command(name="ping", description="Sanity check: bot is alive.")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(
-        f"✅ Pong. Bot is online.\nAPI: {API_BASE}\nGuild sync: {'ON' if DISCORD_GUILD_ID else 'OFF'}",
+        "✅ Pong. Bot is online.\n"
+        f"API: {API_BASE}\n"
+        f"Guild sync: {'ON' if DISCORD_GUILD_ID else 'OFF (global)'}",
         ephemeral=True,
     )
 
@@ -253,7 +389,154 @@ async def config_cmd(interaction: discord.Interaction):
         f"- API_BASE: {API_BASE}\n"
         f"- DISCORD_GUILD_ID: {DISCORD_GUILD_ID or '(global sync)'}\n"
         f"- WINS_CHANNEL: #{WINS_CHANNEL_NAME}\n"
-        f"- FIRST_ACTIONS_CHANNEL: #{FIRST_ACTIONS_CHANNEL_NAME}",
+        f"- FIRST_ACTIONS_CHANNEL: #{FIRST_ACTIONS_CHANNEL_NAME}\n"
+        f"- ADMIN_ROLES: {', '.join(ADMIN_ROLES) if ADMIN_ROLES else '(permission-based)'}\n"
+        f"- LEAD_ROLES: {', '.join(LEAD_ROLES) if LEAD_ROLES else '(none)'}\n"
+        f"- ONBOARDING_URL: {ONBOARDING_URL or '(not set)'}\n"
+        f"- VOLUNTEER_FORM_URL: {VOLUNTEER_FORM_URL or '(not set)'}",
+        ephemeral=True,
+    )
+
+
+# -----------------------------
+# Onboarding (new volunteers)
+# -----------------------------
+
+def _onboarding_message_fallback() -> str:
+    """
+    Used when API is unreachable. Still gives a concrete route.
+    """
+    lines: List[str] = [
+        "👋 **Welcome to the campaign volunteer hub!**",
+        "",
+        "**Do this in order (takes ~3 minutes):**",
+        f"1) Pick **one small action** from **#{FIRST_ACTIONS_CHANNEL_NAME}** (call/text/share/sign up a friend).",
+        "2) Log it with `/log` (example: `/log action_type:call quantity:10`).",
+        f"3) Post a ✅ in **#{WINS_CHANNEL_NAME}** so we can celebrate you.",
+        "",
+        "**Need to get placed on a team?** Use `/request_team_access request_type:team`.",
+        "**Need fundraising lane access?** Use `/request_team_access request_type:fundraising`.",
+    ]
+    if VOLUNTEER_FORM_URL:
+        lines.append("")
+        lines.append(f"📝 Volunteer form: {VOLUNTEER_FORM_URL}")
+    if ONBOARDING_URL:
+        lines.append(f"🌐 Onboarding page: {ONBOARDING_URL}")
+    if DISCORD_HELP_URL:
+        lines.append(f"❓ Discord help: {DISCORD_HELP_URL}")
+    return "\n".join(lines)
+
+
+def _format_next_steps(next_steps: Any) -> str:
+    """
+    /people/onboard returns next_steps list. Keep it readable in Discord.
+    """
+    if not next_steps:
+        return ""
+    if isinstance(next_steps, list):
+        bullets = []
+        for i, s in enumerate(next_steps[:8], start=1):
+            try:
+                bullets.append(f"{i}) {str(s).strip()}")
+            except Exception:
+                continue
+        return "\n".join(bullets)
+    return str(next_steps)
+
+
+@bot.tree.command(name="start", description="Start here: onboarding + next steps.")
+async def start(interaction: discord.Interaction):
+    """
+    Milestone 3: Improved onboarding.
+    - Ensures Person exists via /people/discord/upsert
+    - Marks onboarded + returns next steps via /people/onboard
+    """
+    await interaction.response.defer(ephemeral=True)
+
+    if bot.api is None:
+        await interaction.followup.send(_onboarding_message_fallback(), ephemeral=True)
+        return
+
+    # 1) Ensure person exists
+    person_id, person_data, err = await _ensure_person_by_discord(interaction)
+    if err and person_id is None:
+        await interaction.followup.send(
+            _onboarding_message_fallback()
+            + "\n\n⚠️ Note: I couldn't link you to the dashboard API right now, but you can still follow the steps above.",
+            ephemeral=True,
+        )
+        return
+
+    # 2) Mark onboarded + get next steps
+    onboard_payload = {
+        "person_id": person_id,
+        "discord_user_id": str(interaction.user.id),
+    }
+    code, text, data = await _api_request(bot.api, "POST", "/people/onboard", json=onboard_payload, timeout=20)
+    if code != 200 or not isinstance(data, dict):
+        stage = None
+        try:
+            stage = (person_data or {}).get("stage")
+        except Exception:
+            stage = None
+
+        msg = _onboarding_message_fallback()
+        msg += "\n\n---\n"
+        if person_id:
+            msg += f"🆔 Linked person_id: **{person_id}**\n"
+        msg += "\nNext step:\n" + _next_step_for_stage(stage)
+        msg += "\n\n⚠️ Note: I couldn't complete onboarding in the API yet."
+        await interaction.followup.send(msg, ephemeral=True)
+        return
+
+    # Expected shape: { person: {...}, next_steps: [...] }
+    p = data.get("person") or {}
+    next_steps = data.get("next_steps") or []
+
+    stage = None
+    try:
+        stage = p.get("stage")
+    except Exception:
+        stage = None
+
+    msg_lines: List[str] = [
+        "✅ You’re onboarded.",
+        f"🆔 person_id: **{p.get('id', person_id)}**",
+    ]
+    if stage:
+        msg_lines.append(f"📍 Stage: **{str(stage).upper()}**")
+
+    msg_lines.append("")
+    msg_lines.append("Next steps:")
+    formatted = _format_next_steps(next_steps)
+    msg_lines.append(formatted if formatted else _next_step_for_stage(stage))
+
+    extra: List[str] = []
+    if VOLUNTEER_FORM_URL:
+        extra.append(f"📝 Volunteer form: {VOLUNTEER_FORM_URL}")
+    if ONBOARDING_URL:
+        extra.append(f"🌐 Onboarding page: {ONBOARDING_URL}")
+    if DISCORD_HELP_URL:
+        extra.append(f"❓ Discord help: {DISCORD_HELP_URL}")
+    if extra:
+        msg_lines.append("")
+        msg_lines.extend(extra)
+
+    await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
+
+
+@bot.tree.command(name="whoami", description="Show your Discord identity details used for linking/logging.")
+async def whoami(interaction: discord.Interaction):
+    guild_id = interaction.guild_id
+    channel_id = interaction.channel_id
+    u = interaction.user
+    await interaction.response.send_message(
+        "🪪 Identity\n"
+        f"- discord_user_id: {u.id}\n"
+        f"- username: {u}\n"
+        f"- display_name: {u.display_name}\n"
+        f"- guild_id: {guild_id}\n"
+        f"- channel_id: {channel_id}",
         ephemeral=True,
     )
 
@@ -269,6 +552,7 @@ async def config_cmd(interaction: discord.Interaction):
     leader_phone="Optional phone (used to reuse existing leader person)",
     team_name="Optional team name",
 )
+@_guard(_is_admin, "❌ Admin only. You need a configured admin role or Manage Server permission.")
 async def setup(
     interaction: discord.Interaction,
     leader_name: str = "Beta Leader",
@@ -317,6 +601,7 @@ async def setup(
         f"2) /reach team_id:{team_id}\n"
         f"3) /p5_stats team_id:{team_id}\n"
         f"4) /p5_tree team_id:{team_id}\n"
+        "Tip: New volunteers can type /start anytime."
     )
     await interaction.followup.send(msg, ephemeral=True)
 
@@ -407,7 +692,7 @@ async def p5_invite(
         f"Destination: {destination}\n"
         f"Expires: {expires_at}\n\n"
         f"🔑 Token (showing once):\n`{token}`\n\n"
-        "Later: user posts token to your web form or bot consumes it via /power5/invites/consume."
+        "Tip: New volunteer can type /start, then provide token on the web form or via API consume endpoint."
     )
     await interaction.followup.send(msg, ephemeral=True)
 
@@ -582,16 +867,13 @@ async def log_action(
     if warnings:
         msg = msg + "\n" + "\n".join(warnings) + "\n"
 
-    # Celebrate a stage change (routing cue)
     if stage_changed_to:
         msg += f"\n🎉 Stage updated: **{str(stage_changed_to).upper()}**\n"
         msg += _wins_hint()
     else:
         msg += "\n" + _wins_hint()
 
-    # Add “next step” hint when available
-    if actor_stage:
-        msg += "\n\nNext step:\n" + _next_step_for_stage(actor_stage)
+    msg += "\n\nNext step:\n" + _next_step_for_stage(actor_stage)
 
     await interaction.followup.send(msg, ephemeral=True)
 
@@ -665,7 +947,9 @@ async def reach(
 # -----------------------------
 
 @bot.tree.command(name="my_next", description="Get your next suggested step in the 7-day activation arc.")
-@app_commands.describe(actor_stage="Optional: your current stage if you know it (observer/new/active/owner/team/fundraising/leader).")
+@app_commands.describe(
+    actor_stage="Optional: your current stage if you know it (observer/new/active/owner/team/fundraising/leader)."
+)
 async def my_next(interaction: discord.Interaction, actor_stage: Optional[str] = None):
     await interaction.response.send_message(_next_step_for_stage(actor_stage), ephemeral=True)
 
@@ -676,10 +960,10 @@ async def my_next(interaction: discord.Interaction, actor_stage: Optional[str] =
 
 @bot.tree.command(
     name="request_team_access",
-    description="Request human-approved access (TEAM or FUNDRAISING).",
+    description="Request human-approved access (TEAM, FUNDRAISING, or LEADER).",
 )
 @app_commands.describe(
-    request_type="team|fundraising",
+    request_type="team|fundraising|leader",
     notes="Optional: what access you need + why (short).",
 )
 async def request_team_access(
@@ -693,45 +977,138 @@ async def request_team_access(
         await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
         return
 
-    api_rt = _normalize_request_type(request_type)
+    api_rt = _approval_type_from_user(request_type)
     if not api_rt:
-        await interaction.followup.send("❌ request_type must be `team` or `fundraising`.", ephemeral=True)
+        await interaction.followup.send(
+            "❌ request_type must be `team`, `fundraising`, or `leader` (or *_access).",
+            ephemeral=True,
+        )
         return
 
     payload = {
         "discord_user_id": str(interaction.user.id),
         "name": interaction.user.display_name,
-        "request_type": api_rt,
+        "request_type": api_rt,  # team_access | fundraising_access | leader_access
         "notes": notes,
     }
 
     code, text, data = await _api_request(bot.api, "POST", "/approvals/request", json=payload, timeout=20)
-
-    if code == 404:
-        await interaction.followup.send(
-            "✅ Request noted — approvals endpoint not live yet.\n"
-            "Next dev step: wire /approvals router into the API and restart the API service.",
-            ephemeral=True,
-        )
-        return
-
     if code != 200 or not data:
         await interaction.followup.send(_format_api_error(code, text, data), ephemeral=True)
         return
 
-    approval_id = data.get("id")
-    req_type = data.get("request_type")
-    status = data.get("status")
-
     await interaction.followup.send(
         "✅ Request submitted.\n"
-        f"- approval_id: {approval_id}\n"
-        f"- request_type: {req_type}\n"
-        f"- status: {status}\n\n"
+        f"- approval_id: {data.get('id')}\n"
+        f"- request_type: {data.get('request_type')}\n"
+        f"- status: {data.get('status')}\n\n"
         "A campaign admin will review it shortly.\n"
         "Tip: you can keep logging wins while you wait. " + _wins_hint(),
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="approvals_pending", description="Admin: list pending approval requests.")
+@app_commands.describe(limit="Max items (default 20)", request_type="Optional: team|fundraising|leader")
+@_guard(_is_admin, "❌ Admin only. You need a configured admin role or Manage Server permission.")
+async def approvals_pending(interaction: discord.Interaction, limit: int = 20, request_type: Optional[str] = None):
+    await interaction.response.defer(ephemeral=True)
+
+    if bot.api is None:
+        await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
+        return
+
+    params: Dict[str, Any] = {"limit": max(1, min(limit, 50))}
+    if request_type:
+        api_rt = _approval_type_from_user(request_type)
+        if not api_rt:
+            await interaction.followup.send(
+                "❌ request_type must be `team`, `fundraising`, or `leader` (or *_access).",
+                ephemeral=True,
+            )
+            return
+        params["request_type"] = api_rt
+
+    # Use bot-friendly endpoint that returns enriched items
+    code, text, data = await _api_request(bot.api, "GET", "/approvals/pending", params=params, timeout=20)
+    if code != 200 or not isinstance(data, dict):
+        await interaction.followup.send(_format_api_error(code, text, data), ephemeral=True)
+        return
+
+    items = data.get("items") or []
+    if not items:
+        await interaction.followup.send("✅ No pending approvals right now.", ephemeral=True)
+        return
+
+    lines: List[str] = []
+    for it in items[:50]:
+        try:
+            lines.append(
+                f"- id:{it.get('id')}  type:{it.get('request_type')}  status:{it.get('status')}  "
+                f"user:{it.get('discord_user_id')}  name:{it.get('name')}"
+            )
+        except Exception:
+            continue
+
+    await interaction.followup.send(
+        "🗳️ Pending approvals\n"
+        + "\n".join(lines)
+        + "\n\nUse `/approve approval_id:<id> decision:approve|deny`.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="approve", description="Admin: approve or deny an approval request.")
+@app_commands.describe(
+    approval_id="Approval request id",
+    decision="approve|deny",
+    reason="Optional: short reason (stored on approval request)",
+)
+@_guard(_is_admin, "❌ Admin only. You need a configured admin role or Manage Server permission.")
+async def approve(interaction: discord.Interaction, approval_id: int, decision: str, reason: Optional[str] = None):
+    await interaction.response.defer(ephemeral=True)
+
+    if bot.api is None:
+        await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
+        return
+
+    d = (decision or "").strip().lower()
+    if d not in ("approve", "deny"):
+        await interaction.followup.send("❌ decision must be `approve` or `deny`.", ephemeral=True)
+        return
+
+    reviewer_person_id, _, err = await _ensure_person_by_discord(interaction)
+    if err or reviewer_person_id is None:
+        await interaction.followup.send(
+            "❌ I couldn't link you to a reviewer person_id in the dashboard.\n" + (err or ""),
+            ephemeral=True,
+        )
+        return
+
+    payload = {
+        "reviewer_person_id": reviewer_person_id,
+        "decision": d,
+        "reason": reason,
+    }
+
+    code, text, data = await _api_request(bot.api, "POST", f"/approvals/{approval_id}/review", json=payload, timeout=25)
+    if code != 200 or not isinstance(data, dict):
+        await interaction.followup.send(_format_api_error(code, text, data), ephemeral=True)
+        return
+
+    stage_changed_to = data.get("stage_changed_to")
+    approval = data.get("approval") or {}
+
+    msg = (
+        "✅ Review saved.\n"
+        f"- approval_id: {approval.get('id', approval_id)}\n"
+        f"- status: {approval.get('status')}\n"
+        f"- request_type: {approval.get('request_type')}\n"
+    )
+    if stage_changed_to:
+        msg += f"- stage_changed_to: {stage_changed_to}\n"
+
+    await interaction.followup.send(msg, ephemeral=True)
 
 
 # -----------------------------

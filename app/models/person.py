@@ -66,6 +66,24 @@ class Person(SQLModel, table=True):
     # Discord identity (string because snowflake ids can exceed int range)
     discord_user_id: Optional[str] = Field(default=None, index=True)
 
+    # ---- Onboarding + permissions ----
+    # If set, user has completed onboarding (even if they remain OBSERVER/NEW)
+    onboarded_at: Optional[datetime] = Field(default=None, index=True)
+
+    # Optional lightweight audit for Discord onboarding + sync
+    last_seen_discord_guild_id: Optional[str] = Field(default=None, index=True)
+    last_seen_discord_channel_id: Optional[str] = Field(default=None, index=True)
+    last_seen_discord_username: Optional[str] = Field(default=None)
+
+    # If True, the user can use "team" commands / see team workflows (app-side; Discord roles can mirror this)
+    team_access: bool = Field(default=False, index=True)
+
+    # If True, the user can use fundraising workflows (app-side; Discord roles can mirror this)
+    fundraising_access: bool = Field(default=False, index=True)
+
+    # If True, the user is an admin in the dashboard (NOT necessarily a Discord admin)
+    is_admin: bool = Field(default=False, index=True)
+
     # ---- Lifecycle stage ----
     # Keep the DB column name "stage" for compatibility with existing data.
     stage: VolunteerStage = Field(default=VolunteerStage.OBSERVER, index=True)
@@ -110,3 +128,25 @@ class Person(SQLModel, table=True):
 
     def is_stage_locked(self) -> bool:
         return bool(self.stage_locked)
+
+    def mark_onboarded(self) -> None:
+        if self.onboarded_at is None:
+            self.onboarded_at = utcnow()
+
+    def note_discord_seen(
+        self,
+        *,
+        guild_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> None:
+        """
+        Lightweight "last seen" capture used by onboarding + Discord sync hardening.
+        Safe to call frequently.
+        """
+        if guild_id:
+            self.last_seen_discord_guild_id = guild_id
+        if channel_id:
+            self.last_seen_discord_channel_id = channel_id
+        if username:
+            self.last_seen_discord_username = username

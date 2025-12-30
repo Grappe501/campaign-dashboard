@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime
-from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from ..database import get_session
@@ -16,8 +17,40 @@ from ..models.power5_invite import Power5Invite
 router = APIRouter(prefix="/power5", tags=["power5"])
 
 
+# -------------------------
+# Schemas (bot/UI friendly)
+# -------------------------
+
+class Power5InviteResponse(BaseModel):
+    invite_id: int
+    power_team_id: int
+    expires_at: str
+    token: str
+
+
+class Power5ConsumeResponse(BaseModel):
+    invite_id: int
+    power_team_id: int
+    invited_by_person_id: int
+    invitee_person_id: Optional[int] = None
+    channel: str
+    destination: str
+    consumed_at: str
+
+
+# -------------------------
+# Helpers
+# -------------------------
+
 def _sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _utcnow_naive() -> datetime:
+    """
+    Keep naive UTC datetimes for DB compatibility if your models use naive UTC.
+    """
+    return datetime.utcnow()
 
 
 def _compute_depth(session, team_id: int, parent_person_id: int) -> int:
@@ -41,10 +74,42 @@ def _compute_depth(session, team_id: int, parent_person_id: int) -> int:
     return int(parent_link.depth) + 1
 
 
+def _normalize_channel(channel: str) -> str:
+    c = (channel or "").strip().lower()
+    if c in ("email", "e-mail"):
+        return "email"
+    if c in ("sms", "text"):
+        return "sms"
+    if c in ("discord", "dm"):
+        return "discord"
+    # allow custom channels but keep it predictable
+    return c or "discord"
+
+
+def _is_invite_expired(inv: Power5Invite) -> bool:
+    try:
+        exp = inv.expires_at
+        if exp is None:
+            return False
+        # if expires_at is tz-aware in DB, normalize; otherwise compare naive.
+        if getattr(exp, "tzinfo", None) is not None:
+            return exp < datetime.now(timezone.utc)
+        return exp < _utcnow_naive()
+    except Exception:
+        return False
+
+
+# -------------------------
+# Routes
+# -------------------------
+
 @router.post("/teams/{team_id}/links", response_model=Power5Link)
 def upsert_link(team_id: int, link: Power5Link) -> Power5Link:
     if link.power_team_id != team_id:
         raise HTTPException(status_code=400, detail="power_team_id mismatch")
+
+    if link.child_person_id == link.parent_person_id:
+        raise HTTPException(status_code=400, detail="child_person_id cannot equal parent_person_id")
 
     with get_session() as session:
         # uniqueness: one child per team
@@ -84,7 +149,7 @@ def team_stats(team_id: int) -> Dict[str, Any]:
         by_status: Dict[str, int] = {}
         by_depth: Dict[int, int] = {}
         for r in rows:
-            by_status[r.status] = by_status.get(r.status, 0) + 1
+            by_status[str(r.status)] = by_status.get(str(r.status), 0) + 1
             by_depth[int(r.depth)] = by_depth.get(int(r.depth), 0) + 1
 
         return {
@@ -120,7 +185,7 @@ def team_tree(team_id: int) -> Dict[str, Any]:
         }
 
 
-@router.post("/teams/{team_id}/invites")
+@router.post("/teams/{team_id}/invites", response_model=Power5InviteResponse)
 def create_invite(
     team_id: int,
     invited_by_person_id: int,
@@ -128,8 +193,13 @@ def create_invite(
     destination: str,
     invitee_person_id: Optional[int] = None,
 ):
+    """
+    Create a new invite. Returns the raw token ONCE.
+    """
     raw_token = secrets.token_urlsafe(32)
     token_hash = _sha256(raw_token)
+
+    ch = _normalize_channel(channel)
 
     with get_session() as session:
         team = session.get(PowerTeam, team_id)
@@ -140,7 +210,7 @@ def create_invite(
             power_team_id=team_id,
             invited_by_person_id=invited_by_person_id,
             invitee_person_id=invitee_person_id,
-            channel=channel,
+            channel=ch,
             destination=destination,
             token_hash=token_hash,
         )
@@ -148,17 +218,19 @@ def create_invite(
         session.commit()
         session.refresh(inv)
 
-        # return token ONCE
-        return {
-            "invite_id": inv.id,
-            "power_team_id": team_id,
-            "expires_at": inv.expires_at.isoformat(),
-            "token": raw_token,
-        }
+        return Power5InviteResponse(
+            invite_id=inv.id,
+            power_team_id=team_id,
+            expires_at=inv.expires_at.isoformat() if inv.expires_at else "",
+            token=raw_token,
+        )
 
 
-@router.post("/invites/consume")
+@router.post("/invites/consume", response_model=Power5ConsumeResponse)
 def consume_invite(token: str):
+    """
+    Consume an invite token (one-time).
+    """
     token_hash = _sha256(token)
 
     with get_session() as session:
@@ -167,20 +239,20 @@ def consume_invite(token: str):
             raise HTTPException(status_code=404, detail="Invite not found")
         if inv.consumed_at is not None:
             raise HTTPException(status_code=400, detail="Invite already consumed")
-        if inv.expires_at < datetime.utcnow():
+        if _is_invite_expired(inv):
             raise HTTPException(status_code=400, detail="Invite expired")
 
-        inv.consumed_at = datetime.utcnow()
+        inv.consumed_at = _utcnow_naive()
         session.add(inv)
         session.commit()
         session.refresh(inv)
 
-        return {
-            "invite_id": inv.id,
-            "power_team_id": inv.power_team_id,
-            "invited_by_person_id": inv.invited_by_person_id,
-            "invitee_person_id": inv.invitee_person_id,
-            "channel": inv.channel,
-            "destination": inv.destination,
-            "consumed_at": inv.consumed_at.isoformat(),
-        }
+        return Power5ConsumeResponse(
+            invite_id=inv.id,
+            power_team_id=inv.power_team_id,
+            invited_by_person_id=inv.invited_by_person_id,
+            invitee_person_id=inv.invitee_person_id,
+            channel=str(inv.channel),
+            destination=str(inv.destination),
+            consumed_at=inv.consumed_at.isoformat() if inv.consumed_at else _utcnow_naive().isoformat(),
+        )
