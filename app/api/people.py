@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr, Field as PydField
@@ -69,6 +68,22 @@ class PersonPatch(BaseModel):
     allow_discord_comms: Optional[bool] = None
     allow_leaderboard: Optional[bool] = None
 
+    # Backward-compatible access setters (optional; admin use only).
+    # Accept both styles:
+    #   team / fundraising / leader (legacy shorthand)
+    #   team_access / fundraising_access / leader_access (canonical)
+    #
+    # If present, these do NOT change stage; they only flip boolean access flags.
+    # This is gated behind stage_locked / admin paths in the handler.
+    team_access: Optional[bool] = None
+    fundraising_access: Optional[bool] = None
+    leader_access: Optional[bool] = None
+
+    # Legacy aliases (accepted for compatibility; normalized into canonical booleans)
+    team: Optional[bool] = None
+    fundraising: Optional[bool] = None
+    leader: Optional[bool] = None
+
 
 class PersonReplace(BaseModel):
     """
@@ -99,6 +114,16 @@ class PersonReplace(BaseModel):
     allow_tracking: bool = True
     allow_discord_comms: bool = True
     allow_leaderboard: bool = True
+
+    # Canonical access flags (optional on PUT; if omitted, leave unchanged)
+    team_access: Optional[bool] = None
+    fundraising_access: Optional[bool] = None
+    leader_access: Optional[bool] = None
+
+    # Legacy aliases (optional; normalized)
+    team: Optional[bool] = None
+    fundraising: Optional[bool] = None
+    leader: Optional[bool] = None
 
 
 class DiscordUpsert(BaseModel):
@@ -204,11 +229,13 @@ def _ensure_tracking_number(seed: str) -> str:
 
 
 def _person_to_dict(p: Person) -> Dict[str, Any]:
+    """
+    Always return canonical *_access booleans, while remaining compatible with older clients.
+    """
     try:
-        return p.model_dump()
+        d: Dict[str, Any] = p.model_dump()
     except Exception:
-        # safe minimal fallback
-        return {
+        d = {
             "id": p.id,
             "tracking_number": p.tracking_number,
             "name": p.name,
@@ -218,12 +245,21 @@ def _person_to_dict(p: Person) -> Dict[str, Any]:
             "stage": str(p.stage) if getattr(p, "stage", None) is not None else None,
             "stage_locked": bool(getattr(p, "stage_locked", False)),
             "onboarded_at": getattr(p, "onboarded_at", None),
-            "team_access": bool(getattr(p, "team_access", False)),
-            "fundraising_access": bool(getattr(p, "fundraising_access", False)),
-            "is_admin": bool(getattr(p, "is_admin", False)),
             "county": getattr(p, "county", None),
             "city": getattr(p, "city", None),
         }
+
+    d["team_access"] = bool(getattr(p, "team_access", False))
+    d["fundraising_access"] = bool(getattr(p, "fundraising_access", False))
+    d["leader_access"] = bool(getattr(p, "leader_access", False))
+    d["is_admin"] = bool(getattr(p, "is_admin", False))
+
+    # Legacy mirrors for clients that still read old keys (keep them in response; they equal canonical)
+    d["team"] = d["team_access"]
+    d["fundraising"] = d["fundraising_access"]
+    d["leader"] = d["leader_access"]
+
+    return d
 
 
 def _next_steps_for_person(p: Person) -> List[str]:
@@ -246,7 +282,12 @@ def _next_steps_for_person(p: Person) -> List[str]:
         steps.append("Pick a lane for this week and bring 1 new person into the hub.")
 
     # gated capabilities (app-side permissions; Discord can mirror)
-    if getattr(p, "team_access", False) and p.stage in (VolunteerStage.TEAM, VolunteerStage.LEADER, VolunteerStage.ADMIN):
+    if getattr(p, "team_access", False) and p.stage in (
+        VolunteerStage.TEAM,
+        VolunteerStage.LEADER,
+        VolunteerStage.ADMIN,
+        VolunteerStage.FUNDRAISING,
+    ):
         steps.append("Coordinate in your team lane and post daily wins.")
     else:
         steps.append("If you need deeper access, request TEAM access (human-approved).")
@@ -256,7 +297,46 @@ def _next_steps_for_person(p: Person) -> List[str]:
     else:
         steps.append("If you will help with fundraising, request FUNDRAISING access (human-approved).")
 
+    if getattr(p, "leader_access", False):
+        steps.append("If you own a lane, post today’s priorities and assign 1 task.")
+    else:
+        steps.append("If you’re leading a lane, request LEADER access (human-approved).")
+
     return steps
+
+
+def _apply_access_updates(
+    p: Person,
+    *,
+    team_access: Optional[bool] = None,
+    fundraising_access: Optional[bool] = None,
+    leader_access: Optional[bool] = None,
+) -> bool:
+    """
+    Apply canonical access updates if the model supports them.
+    Returns True if any value changed.
+    """
+    changed = False
+
+    if team_access is not None and hasattr(p, "team_access"):
+        new_val = bool(team_access)
+        if bool(getattr(p, "team_access", False)) != new_val:
+            p.team_access = new_val
+            changed = True
+
+    if fundraising_access is not None and hasattr(p, "fundraising_access"):
+        new_val = bool(fundraising_access)
+        if bool(getattr(p, "fundraising_access", False)) != new_val:
+            p.fundraising_access = new_val
+            changed = True
+
+    if leader_access is not None and hasattr(p, "leader_access"):
+        new_val = bool(leader_access)
+        if bool(getattr(p, "leader_access", False)) != new_val:
+            p.leader_access = new_val
+            changed = True
+
+    return changed
 
 
 # -----------------------------
@@ -514,6 +594,7 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
     - Cannot set gated stages via this endpoint.
     - Cannot change stage if stage_locked=True.
     - Stage transitions (safe) go through apply_stage_change for audit consistency.
+    - Access flag updates accept both legacy and canonical keys, but never change stage.
     """
     with get_session() as session:
         p = session.get(Person, person_id)
@@ -561,6 +642,33 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
         if payload.allow_leaderboard is not None:
             p.allow_leaderboard = payload.allow_leaderboard
 
+        # Access updates (canonical + legacy aliases)
+        # We treat these as admin-only controls:
+        # - If stage is locked, only allow if caller is in an admin workflow (not represented here),
+        #   so we conservatively block when locked.
+        if bool(getattr(p, "stage_locked", False)) and (
+            payload.team_access is not None
+            or payload.fundraising_access is not None
+            or payload.leader_access is not None
+            or payload.team is not None
+            or payload.fundraising is not None
+            or payload.leader is not None
+        ):
+            raise HTTPException(status_code=403, detail="Access flags are managed by approvals while stage is locked.")
+
+        team_access = payload.team_access if payload.team_access is not None else payload.team
+        fundraising_access = (
+            payload.fundraising_access if payload.fundraising_access is not None else payload.fundraising
+        )
+        leader_access = payload.leader_access if payload.leader_access is not None else payload.leader
+
+        _apply_access_updates(
+            p,
+            team_access=team_access,
+            fundraising_access=fundraising_access,
+            leader_access=leader_access,
+        )
+
         session.add(p)
         session.commit()
         session.refresh(p)
@@ -577,6 +685,7 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
     - stage cannot be set to gated stages here.
     - cannot change stage if stage_locked=True.
     - stage transitions (safe) go through apply_stage_change for audit consistency.
+    - access flags accept both legacy and canonical keys; if provided they are applied.
     """
     with get_session() as session:
         p = session.get(Person, person_id)
@@ -612,6 +721,30 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
         p.allow_tracking = payload.allow_tracking
         p.allow_discord_comms = payload.allow_discord_comms
         p.allow_leaderboard = payload.allow_leaderboard
+
+        # Access updates (canonical + legacy aliases)
+        if bool(getattr(p, "stage_locked", False)) and (
+            payload.team_access is not None
+            or payload.fundraising_access is not None
+            or payload.leader_access is not None
+            or payload.team is not None
+            or payload.fundraising is not None
+            or payload.leader is not None
+        ):
+            raise HTTPException(status_code=403, detail="Access flags are managed by approvals while stage is locked.")
+
+        team_access = payload.team_access if payload.team_access is not None else payload.team
+        fundraising_access = (
+            payload.fundraising_access if payload.fundraising_access is not None else payload.fundraising
+        )
+        leader_access = payload.leader_access if payload.leader_access is not None else payload.leader
+
+        _apply_access_updates(
+            p,
+            team_access=team_access,
+            fundraising_access=fundraising_access,
+            leader_access=leader_access,
+        )
 
         session.add(p)
         session.commit()

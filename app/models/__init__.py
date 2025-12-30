@@ -4,4 +4,4 @@ from .voter import VoterContact
 from .event import Event
 
 # Milestone 3: Approvals (TEAM / FUNDRAISING / LEADER gating)
-from .approval_request import ApprovalRequest
+from .approval_request import ApprovalRequest, ApprovalStatus, ApprovalType

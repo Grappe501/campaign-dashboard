@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, Set
 
 from sqlmodel import SQLModel, Field
 
@@ -40,6 +40,14 @@ class VolunteerStage(str, Enum):
     ADMIN = "admin"
 
 
+_APPROVAL_GATED_STAGES: Set[VolunteerStage] = {
+    VolunteerStage.TEAM,
+    VolunteerStage.FUNDRAISING,
+    VolunteerStage.LEADER,
+    VolunteerStage.ADMIN,
+}
+
+
 class Person(SQLModel, table=True):
     """
     A single human in the campaign system.
@@ -48,6 +56,7 @@ class Person(SQLModel, table=True):
     - tracking_number is the stable campaign-issued identifier.
     - discord_user_id is stored as a string because Discord snowflake IDs can exceed 32-bit ints.
     - stage_locked prevents auto-promotion from impact logging (approval gates must be explicit).
+    - *_access flags are the canonical stored permissions booleans used by API + bot payloads.
     """
 
     __tablename__ = "people"
@@ -75,13 +84,15 @@ class Person(SQLModel, table=True):
     last_seen_discord_channel_id: Optional[str] = Field(default=None, index=True)
     last_seen_discord_username: Optional[str] = Field(default=None)
 
-    # If True, the user can use "team" commands / see team workflows (app-side; Discord roles can mirror this)
+    # Canonical access booleans (API-stable)
     team_access: bool = Field(default=False, index=True)
-
-    # If True, the user can use fundraising workflows (app-side; Discord roles can mirror this)
     fundraising_access: bool = Field(default=False, index=True)
 
-    # If True, the user is an admin in the dashboard (NOT necessarily a Discord admin)
+    # Added for parity with approvals request types (team_access/fundraising_access/leader_access)
+    leader_access: bool = Field(default=False, index=True)
+
+    # If True, the user is an admin in the dashboard (NOT necessarily a Discord admin).
+    # Kept as-is for backward compatibility with existing code/data.
     is_admin: bool = Field(default=False, index=True)
 
     # ---- Lifecycle stage ----
@@ -117,14 +128,12 @@ class Person(SQLModel, table=True):
 
     created_at: datetime = Field(default_factory=utcnow, index=True)
 
+    # -------------------------
     # Convenience helpers (safe to use in services)
+    # -------------------------
+
     def is_approval_gated(self) -> bool:
-        return self.stage in {
-            VolunteerStage.TEAM,
-            VolunteerStage.FUNDRAISING,
-            VolunteerStage.LEADER,
-            VolunteerStage.ADMIN,
-        }
+        return self.stage in _APPROVAL_GATED_STAGES
 
     def is_stage_locked(self) -> bool:
         return bool(self.stage_locked)
@@ -150,3 +159,16 @@ class Person(SQLModel, table=True):
             self.last_seen_discord_channel_id = channel_id
         if username:
             self.last_seen_discord_username = username
+
+    # Optional helpers for code readability (no DB impact)
+    def has_team_access(self) -> bool:
+        return bool(self.team_access)
+
+    def has_fundraising_access(self) -> bool:
+        return bool(self.fundraising_access)
+
+    def has_leader_access(self) -> bool:
+        return bool(self.leader_access)
+
+    def has_admin_access(self) -> bool:
+        return bool(self.is_admin)

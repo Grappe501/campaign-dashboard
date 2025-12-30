@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Back-compat: allow old DB_PATH if DATABASE_URL not set
     db_path: str = Field(default="./data/campaign.sqlite", alias="DB_PATH")
 
+    # SQLite schema safety (local dev)
+    # If True and using SQLite, we will attempt non-destructive ALTER TABLEs
+    # for missing columns during init_db(). Keep False in production DBs.
+    sqlite_auto_migrate: bool = Field(default=True, alias="SQLITE_AUTO_MIGRATE")
+
     # Secrets
     discord_bot_token: str = Field(default="", alias="DISCORD_BOT_TOKEN")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")

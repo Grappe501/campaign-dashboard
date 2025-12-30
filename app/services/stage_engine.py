@@ -32,10 +32,12 @@ class StageDecision:
 # Guard rails / policy
 # -------------------------
 
+# Approval-gated stages (must never be reached via auto-promotion).
 GATED_STAGES = {
     VolunteerStage.TEAM,
     VolunteerStage.FUNDRAISING,
     VolunteerStage.LEADER,
+    VolunteerStage.ADMIN,
 }
 
 
@@ -62,7 +64,7 @@ def can_transition(
     Rules:
     - If stage_locked=True, only allow transition when allow_if_locked=True.
       (e.g., human-approved transitions)
-    - Never auto-promote into gated stages (TEAM/FUNDRAISING/LEADER).
+    - Never auto-promote into gated stages (TEAM/FUNDRAISING/LEADER/ADMIN). (enforced elsewhere)
     - You may always *keep* someone in their current stage (no-op).
     """
     if person.stage == new_stage:
@@ -80,7 +82,7 @@ def evaluate_auto_promotion(person: Person, stats: PersonImpactStats) -> Optiona
 
     Rules:
     - If stage is locked, never auto-promote.
-    - Never auto-promote into approval-gated stages (TEAM/FUNDRAISING/LEADER).
+    - Never auto-promote into approval-gated stages (TEAM/FUNDRAISING/LEADER/ADMIN).
     - Observer/New -> Active after 1+ actions
     - Active -> Owner after 5+ actions
     """
@@ -135,6 +137,53 @@ def evaluate_stage_change_from_impact(
     )
 
 
+def _sync_access_flags_from_stage(person: Person) -> None:
+    """
+    Keep canonical *_access booleans consistent with stage changes.
+
+    Policy:
+    - TEAM stage implies team_access True
+    - FUNDRAISING stage implies fundraising_access True (and also team_access True)
+    - LEADER stage implies leader_access True (and also team_access True)
+    - ADMIN implies all access True and is_admin True
+    - Moving to non-gated stages does NOT automatically revoke access flags.
+      Revocation should be explicit (admin path) because it is high-impact.
+    """
+    stage = getattr(person, "stage", None)
+
+    # Defensive: if model doesn't have these fields (older DB), just skip.
+    has_team = hasattr(person, "team_access")
+    has_fund = hasattr(person, "fundraising_access")
+    has_leader = hasattr(person, "leader_access")
+    has_admin = hasattr(person, "is_admin")
+
+    if stage == VolunteerStage.TEAM:
+        if has_team:
+            person.team_access = True
+
+    elif stage == VolunteerStage.FUNDRAISING:
+        if has_team:
+            person.team_access = True
+        if has_fund:
+            person.fundraising_access = True
+
+    elif stage == VolunteerStage.LEADER:
+        if has_team:
+            person.team_access = True
+        if has_leader:
+            person.leader_access = True
+
+    elif stage == VolunteerStage.ADMIN:
+        if has_team:
+            person.team_access = True
+        if has_fund:
+            person.fundraising_access = True
+        if has_leader:
+            person.leader_access = True
+        if has_admin:
+            person.is_admin = True
+
+
 def apply_stage_change(
     session: Session,
     person: Person,
@@ -143,7 +192,7 @@ def apply_stage_change(
     lock_stage: bool = False,
 ) -> None:
     """
-    Apply a stage update + audit fields.
+    Apply a stage update + audit fields + access flag sync.
 
     Safe behavior:
     - No-op if stage unchanged AND lock_stage=False.
@@ -153,6 +202,10 @@ def apply_stage_change(
     Guard behavior:
     - If person.stage_locked=True, this function assumes the caller is a human/admin path.
       (Approvals passes lock_stage=True and is treated as allow_if_locked=True.)
+
+    Access-sync behavior:
+    - On stage changes into gated stages, ensures canonical *_access booleans are turned on.
+    - Does NOT auto-revoke access on stage reductions (revocation must be explicit).
     """
     if not reason or not str(reason).strip():
         reason = "unspecified"
@@ -162,7 +215,6 @@ def apply_stage_change(
     allowed, why = can_transition(person, new_stage, allow_if_locked=allow_if_locked)
     if not allowed:
         # Intentionally no-op rather than raising: bot/API should not crash on a policy block.
-        # The calling endpoint should decide whether to surface this in response payload.
         return
 
     stage_changed = person.stage != new_stage
@@ -175,6 +227,10 @@ def apply_stage_change(
         person.stage = new_stage
         person.stage_last_changed_at = utcnow()
         person.stage_changed_reason = reason
+
+        # If we just moved into a gated stage, sync access flags.
+        if _is_gated(new_stage):
+            _sync_access_flags_from_stage(person)
 
     if lock_stage:
         person.stage_locked = True

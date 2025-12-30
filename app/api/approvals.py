@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Any, Dict, Literal, List, cast
+from typing import Optional, Any, Dict, Literal, List, cast, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -25,6 +25,8 @@ class ApprovalRequestCreate(BaseModel):
     Backward-compatible request_type:
       - accepts: team | fundraising | leader
       - accepts: team_access | fundraising_access | leader_access
+
+    We always store canonical *_access equivalents.
     """
     person_id: Optional[int] = None
     discord_user_id: Optional[str] = None
@@ -34,12 +36,11 @@ class ApprovalRequestCreate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
 
-    # NOTE: keep as str so we can accept both legacy + canonical strings
+    # Keep as str so we can accept both legacy + canonical strings
     request_type: str
     notes: Optional[str] = None
 
-    # Optional metadata (safe to store; helps trace Discord request context)
-    # NOTE: ApprovalRequest model may not yet have a meta/json column; we accept for forward-compat.
+    # Optional metadata (forward-compatible: set only if model supports it)
     meta: Optional[Dict[str, Any]] = None
 
 
@@ -68,17 +69,35 @@ class ApprovalListResponse(BaseModel):
 # Helpers
 # -------------------------
 
+# Canonical string forms we want returned to clients
+_CANONICAL_ACCESS_STRINGS: Dict[ApprovalType, str] = {
+    ApprovalType.TEAM: "team_access",
+    ApprovalType.FUNDRAISING: "fundraising_access",
+    ApprovalType.LEADER: "leader_access",
+}
+
+# Accepted inbound aliases (legacy + canonical)
 _APPROVAL_TYPE_ALIASES: Dict[str, ApprovalType] = {
     # legacy short forms
     "team": ApprovalType.TEAM,
     "fundraising": ApprovalType.FUNDRAISING,
     "leader": ApprovalType.LEADER,
 
-    # canonical stored values
+    # canonical stored/returned forms
     "team_access": ApprovalType.TEAM,
     "fundraising_access": ApprovalType.FUNDRAISING,
     "leader_access": ApprovalType.LEADER,
 }
+
+
+def _canonical_request_type_string(rt: ApprovalType) -> str:
+    # Prefer explicit mapping; fallback to enum value/name if model differs
+    if rt in _CANONICAL_ACCESS_STRINGS:
+        return _CANONICAL_ACCESS_STRINGS[rt]
+    v = getattr(rt, "value", None)
+    if isinstance(v, str) and v:
+        return v
+    return str(rt).lower()
 
 
 def _parse_approval_type(raw: Optional[str]) -> Optional[ApprovalType]:
@@ -95,6 +114,13 @@ def _parse_approval_type(raw: Optional[str]) -> Optional[ApprovalType]:
     if not s:
         return None
     return _APPROVAL_TYPE_ALIASES.get(s)
+
+
+def _parse_approval_type_and_canonical(raw: Optional[str]) -> Tuple[Optional[ApprovalType], Optional[str]]:
+    rt = _parse_approval_type(raw)
+    if not rt:
+        return None, None
+    return rt, _canonical_request_type_string(rt)
 
 
 def _target_stage_for_request_type(rt: ApprovalType) -> VolunteerStage:
@@ -163,11 +189,28 @@ def _reviewer_person_from_payload(session, payload: ApprovalReview) -> Optional[
     return None
 
 
-def _to_dict(req: ApprovalRequest) -> Dict[str, Any]:
+def _set_if_present(obj: Any, field: str, value: Any) -> None:
+    """
+    Set obj.field=value only if the attribute exists on the object.
+    Used for forward-compatible fields like `meta`.
+    """
     try:
-        return req.model_dump()
+        if hasattr(obj, field):
+            setattr(obj, field, value)
     except Exception:
-        return {
+        # Be defensive: never fail request creation due to an optional field mismatch.
+        return
+
+
+def _to_dict(req: ApprovalRequest) -> Dict[str, Any]:
+    """
+    Serialize ApprovalRequest into a stable dict, forcing canonical request_type strings.
+    """
+    # Start with model_dump if available, but we will override request_type and some enum-ish fields.
+    try:
+        d: Dict[str, Any] = req.model_dump()
+    except Exception:
+        d = {
             "id": getattr(req, "id", None),
             "person_id": getattr(req, "person_id", None),
             "request_type": getattr(req, "request_type", None),
@@ -178,13 +221,33 @@ def _to_dict(req: ApprovalRequest) -> Dict[str, Any]:
             "reviewed_by_person_id": getattr(req, "reviewed_by_person_id", None),
         }
 
+    # Force canonical request_type
+    rt = getattr(req, "request_type", None)
+    if isinstance(rt, ApprovalType):
+        d["request_type"] = _canonical_request_type_string(rt)
+    elif rt is not None:
+        # If model stores string, normalize if it's an alias
+        parsed = _parse_approval_type(str(rt))
+        d["request_type"] = _canonical_request_type_string(parsed) if parsed else str(rt)
+
+    # Normalize status if it's an enum
+    st = getattr(req, "status", None)
+    if st is not None and not isinstance(st, (str, int)):
+        d["status"] = getattr(st, "value", str(st))
+
+    return d
+
+
+def _bad_request_type_message() -> str:
+    return "request_type must be team|fundraising|leader (or *_access variants)."
+
 
 # -------------------------
 # Routes
 # -------------------------
 
-@router.post("/request", response_model=ApprovalRequest)
-def create_approval_request(payload: ApprovalRequestCreate) -> ApprovalRequest:
+@router.post("/request", response_model=Dict[str, Any])
+def create_approval_request(payload: ApprovalRequestCreate) -> Dict[str, Any]:
     """
     Create a PENDING approval request.
 
@@ -192,13 +255,12 @@ def create_approval_request(payload: ApprovalRequestCreate) -> ApprovalRequest:
       request_type accepts:
         - team / fundraising / leader
         - team_access / fundraising_access / leader_access
+
+    Storage + responses are canonicalized to *_access.
     """
-    rt = _parse_approval_type(payload.request_type)
+    rt, _canonical = _parse_approval_type_and_canonical(payload.request_type)
     if not rt:
-        raise HTTPException(
-            status_code=400,
-            detail="request_type must be team|fundraising|leader (or *_access variants).",
-        )
+        raise HTTPException(status_code=400, detail=_bad_request_type_message())
 
     with get_session() as session:
         person = _find_person(
@@ -226,6 +288,7 @@ def create_approval_request(payload: ApprovalRequestCreate) -> ApprovalRequest:
             session.commit()
             session.refresh(person)
 
+        # Only allow one pending request of the same canonical type per person
         existing = session.exec(
             select(ApprovalRequest).where(
                 ApprovalRequest.person_id == person.id,
@@ -234,43 +297,43 @@ def create_approval_request(payload: ApprovalRequestCreate) -> ApprovalRequest:
             )
         ).first()
         if existing:
-            return existing
+            return _to_dict(existing)
 
         req = ApprovalRequest(
             person_id=person.id,
-            request_type=rt,
+            request_type=rt,  # enum stored; should be canonical if enum values are canonical
             status=ApprovalStatus.PENDING,
             notes=payload.notes,
             created_at=utcnow(),
         )
+        _set_if_present(req, "meta", payload.meta)
 
         session.add(req)
         session.commit()
         session.refresh(req)
-        return req
+        return _to_dict(req)
 
 
-@router.get("/", response_model=list[ApprovalRequest])
+@router.get("/", response_model=List[Dict[str, Any]])
 def list_requests(
     status: Optional[ApprovalStatus] = None,
-    request_type: Optional[str] = None,  # <-- accept both styles
+    request_type: Optional[str] = None,  # accept both styles
     person_id: Optional[int] = None,
     limit: int = 200,
-) -> list[ApprovalRequest]:
+) -> List[Dict[str, Any]]:
     """
     List approval requests.
 
     Backward compatible:
       /approvals/?status=pending&request_type=team&limit=20
       /approvals/?status=pending&request_type=team_access&limit=20
+
+    Response always returns canonical *_access request_type strings.
     """
     limit = max(1, min(int(limit or 200), 500))
-    rt = _parse_approval_type(request_type)
+    rt, _canonical = _parse_approval_type_and_canonical(request_type)
     if request_type and not rt:
-        raise HTTPException(
-            status_code=400,
-            detail="request_type must be team|fundraising|leader (or *_access variants).",
-        )
+        raise HTTPException(status_code=400, detail=_bad_request_type_message())
 
     with get_session() as session:
         q = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
@@ -281,13 +344,14 @@ def list_requests(
         if person_id:
             q = q.where(ApprovalRequest.person_id == person_id)
         q = q.limit(limit)
-        return list(session.exec(q).all())
+        rows = list(session.exec(q).all())
+        return [_to_dict(r) for r in rows]
 
 
 @router.get("/pending", response_model=ApprovalListResponse)
 def pending_requests(
     limit: int = 20,
-    request_type: Optional[str] = None,  # <-- accept both styles
+    request_type: Optional[str] = None,  # accept both styles
 ) -> ApprovalListResponse:
     """
     Bot-friendly pending list endpoint (legacy / convenience).
@@ -295,14 +359,13 @@ def pending_requests(
     Backward compatible:
       /approvals/pending?request_type=team
       /approvals/pending?request_type=team_access
+
+    Response always returns canonical *_access request_type strings.
     """
     limit = max(1, min(int(limit or 20), 50))
-    rt = _parse_approval_type(request_type)
+    rt, _canonical = _parse_approval_type_and_canonical(request_type)
     if request_type and not rt:
-        raise HTTPException(
-            status_code=400,
-            detail="request_type must be team|fundraising|leader (or *_access variants).",
-        )
+        raise HTTPException(status_code=400, detail=_bad_request_type_message())
 
     with get_session() as session:
         q = select(ApprovalRequest).where(ApprovalRequest.status == ApprovalStatus.PENDING)
@@ -327,13 +390,13 @@ def pending_requests(
         return ApprovalListResponse(items=items)
 
 
-@router.get("/{approval_id}", response_model=ApprovalRequest)
-def get_request(approval_id: int) -> ApprovalRequest:
+@router.get("/{approval_id}", response_model=Dict[str, Any])
+def get_request(approval_id: int) -> Dict[str, Any]:
     with get_session() as session:
         req = session.get(ApprovalRequest, approval_id)
         if not req:
             raise HTTPException(status_code=404, detail="ApprovalRequest not found")
-        return req
+        return _to_dict(req)
 
 
 @router.post("/{approval_id}/review", response_model=ApprovalReviewResponse)
@@ -373,6 +436,7 @@ def review_request(approval_id: int, payload: ApprovalReview) -> ApprovalReviewR
             session.refresh(req)
             return ApprovalReviewResponse(approval=_to_dict(req), stage_changed_to=None)
 
+        # approve
         req.status = ApprovalStatus.APPROVED
         req.reviewed_at = utcnow()
         req.reviewed_by_person_id = reviewer.id
@@ -381,13 +445,21 @@ def review_request(approval_id: int, payload: ApprovalReview) -> ApprovalReviewR
         session.commit()
         session.refresh(req)
 
-        target_stage = _target_stage_for_request_type(cast(ApprovalType, req.request_type))
+        # Determine target stage
+        rt = getattr(req, "request_type", None)
+        if not isinstance(rt, ApprovalType):
+            parsed = _parse_approval_type(str(rt)) if rt is not None else None
+            if not parsed:
+                raise HTTPException(status_code=500, detail="Invalid request_type stored on ApprovalRequest")
+            rt = parsed
+
+        target_stage = _target_stage_for_request_type(cast(ApprovalType, rt))
 
         apply_stage_change(
             session=session,
             person=person,
             new_stage=target_stage,
-            reason=f"approved:{req.request_type}",
+            reason=f"approved:{_canonical_request_type_string(cast(ApprovalType, rt))}",
             lock_stage=True,
         )
 

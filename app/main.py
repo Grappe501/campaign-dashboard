@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -53,7 +53,7 @@ def create_app() -> FastAPI:
         init_db()
 
     # --- Friendly error envelope (API callers + bot) ---
-    @app.exception_handler(HTTPException)  # type: ignore[name-defined]
+    @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc):  # noqa: ANN001
         # Keep FastAPI semantics but provide a consistent JSON structure
         try:

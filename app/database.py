@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, List
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlmodel import SQLModel, Session, create_engine
 
@@ -41,7 +41,7 @@ def _sqlite_pragmas(engine: Engine) -> None:
     """
 
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):  # noqa: ANN001
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL;")  # better concurrency
         cursor.execute("PRAGMA synchronous=NORMAL;")  # good perf/safety balance
@@ -60,7 +60,7 @@ def _postgres_session_settings(engine: Engine) -> None:
     """
 
     @event.listens_for(engine, "connect")
-    def _set_postgres_settings(dbapi_connection, connection_record):
+    def _set_postgres_settings(dbapi_connection, connection_record):  # noqa: ANN001
         try:
             cursor = dbapi_connection.cursor()
             # 30 seconds; tune later
@@ -149,6 +149,121 @@ def register_models() -> None:
     # from .models.voter_history import VoterHistory  # noqa: F401
 
 
+def _sqlite_table_exists(session: Session, table: str) -> bool:
+    row = session.exec(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+        params={"name": table},
+    ).first()
+    return bool(row)
+
+
+def _sqlite_get_columns(session: Session, table: str) -> List[str]:
+    cols: List[str] = []
+    rows = session.exec(text(f"PRAGMA table_info({table});")).all()
+    for r in rows:
+        # PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+        try:
+            cols.append(str(r[1]))
+        except Exception:
+            continue
+    return cols
+
+
+def _sqlite_add_column_if_missing(
+    session: Session,
+    *,
+    table: str,
+    column: str,
+    ddl: str,
+) -> bool:
+    """
+    Non-destructive SQLite-only micro-migration.
+    Returns True if column was added.
+    """
+    if not _sqlite_table_exists(session, table):
+        return False
+
+    existing = set(_sqlite_get_columns(session, table))
+    if column in existing:
+        return False
+
+    session.exec(text(f"ALTER TABLE {table} ADD COLUMN {ddl};"))
+    session.commit()
+    return True
+
+
+def _sqlite_backfill_if_possible(
+    session: Session,
+    *,
+    table: str,
+    dst_col: str,
+    src_col: str,
+) -> None:
+    """
+    Backfill dst_col from src_col if both columns exist.
+    Safe no-op if table/columns are missing.
+    """
+    if not _sqlite_table_exists(session, table):
+        return
+
+    existing = set(_sqlite_get_columns(session, table))
+    if dst_col not in existing or src_col not in existing:
+        return
+
+    session.exec(
+        text(
+            f"""
+            UPDATE {table}
+            SET {dst_col} = {src_col}
+            WHERE ({dst_col} IS NULL OR {dst_col} = 0)
+              AND {src_col} IS NOT NULL
+            """
+        )
+    )
+    session.commit()
+
+
+def _sqlite_auto_migrate() -> None:
+    """
+    SQLite-only, local-dev convenience to add missing columns in-place.
+
+    This is intentionally conservative:
+    - only ADD COLUMN operations
+    - optional backfills (no drops/renames)
+    - gated behind settings.sqlite_auto_migrate
+    """
+    if not settings.sqlite_auto_migrate:
+        return
+
+    database_url = settings.resolved_database_url
+    if not _is_sqlite(database_url):
+        return
+
+    with Session(engine) as session:
+        # Person table: new canonical access flag added in Milestone 3+
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="leader_access",
+            ddl="leader_access BOOLEAN DEFAULT 0",
+        )
+
+        # PowerTeamMember: standardize member FK to person_id
+        # If table doesn't exist yet, these are harmless no-ops.
+        _sqlite_add_column_if_missing(
+            session,
+            table="power_team_members",
+            column="person_id",
+            ddl="person_id INTEGER",
+        )
+        _sqlite_backfill_if_possible(
+            session,
+            table="power_team_members",
+            dst_col="person_id",
+            src_col="member_person_id",
+        )
+
+
 def init_db(create_tables: bool = True) -> None:
     """
     Register models, then create missing tables (SQLite/local dev).
@@ -161,6 +276,9 @@ def init_db(create_tables: bool = True) -> None:
     register_models()
     if create_tables:
         SQLModel.metadata.create_all(engine)
+
+    # SQLite-only convenience migrations
+    _sqlite_auto_migrate()
 
 
 def get_session() -> Session:
