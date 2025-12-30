@@ -39,14 +39,15 @@ def _sqlite_pragmas(engine: Engine) -> None:
     Pragmas that make SQLite usable for multi-request local dev and larger datasets.
     Safe defaults that won't corrupt data.
     """
+
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragmas(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL;")           # better concurrency
-        cursor.execute("PRAGMA synchronous=NORMAL;")         # good perf/safety balance
-        cursor.execute("PRAGMA temp_store=MEMORY;")          # speed temp ops
-        cursor.execute("PRAGMA foreign_keys=ON;")            # enforce FKs
-        cursor.execute("PRAGMA busy_timeout=5000;")          # reduce 'database is locked'
+        cursor.execute("PRAGMA journal_mode=WAL;")  # better concurrency
+        cursor.execute("PRAGMA synchronous=NORMAL;")  # good perf/safety balance
+        cursor.execute("PRAGMA temp_store=MEMORY;")  # speed temp ops
+        cursor.execute("PRAGMA foreign_keys=ON;")  # enforce FKs
+        cursor.execute("PRAGMA busy_timeout=5000;")  # reduce 'database is locked'
         # Cache size is in pages; negative means KB. e.g., -64000 = ~64MB cache
         cursor.execute("PRAGMA cache_size=-64000;")
         cursor.close()
@@ -57,6 +58,7 @@ def _postgres_session_settings(engine: Engine) -> None:
     Optional: add per-connection settings for Postgres later (safe to keep now).
     Example: statement_timeout to avoid runaway queries on huge voter tables.
     """
+
     @event.listens_for(engine, "connect")
     def _set_postgres_settings(dbapi_connection, connection_record):
         try:
@@ -83,9 +85,7 @@ def get_engine() -> Engine:
     if _is_sqlite(database_url):
         _ensure_sqlite_dir(database_url)
 
-    connect_args = {}
-    if _is_sqlite(database_url):
-        connect_args = {"check_same_thread": False}
+    connect_args = {"check_same_thread": False} if _is_sqlite(database_url) else {}
 
     engine = create_engine(
         database_url,
@@ -126,6 +126,18 @@ def register_models() -> None:
     from .models.county import County  # noqa: F401
     from .models.county_snapshot import CountySnapshot  # noqa: F401
     from .models.alice_county import AliceCounty  # noqa: F401
+
+    # Power of 5 workflows
+    from .models.power5_link import Power5Link  # noqa: F401
+    from .models.power5_invite import Power5Invite  # noqa: F401
+
+    # Impact Reach
+    from .models.impact_rule import ImpactRule  # noqa: F401
+    from .models.impact_action import ImpactAction  # noqa: F401
+    from .models.impact_reach_snapshot import ImpactReachSnapshot  # noqa: F401
+
+    # Approvals (Milestone 3 gating)
+    from .models.approval_request import ApprovalRequest  # noqa: F401
 
     # Next milestone (uncomment when added)
     # from .models.bls_area_series import BLSAreaSeries  # noqa: F401
