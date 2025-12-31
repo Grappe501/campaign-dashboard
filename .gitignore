@@ -24,3 +24,7 @@ data/
 *.sqlite
 *.db
 logs/
+
+# build artifacts
+*.zip
+
