@@ -29,6 +29,27 @@ def _utcnow_naive() -> datetime:
     return datetime.utcnow().replace(tzinfo=None)
 
 
+def _clean_str(s: Optional[str], max_len: int = 500) -> Optional[str]:
+    if s is None:
+        return None
+    v = str(s).strip()
+    if not v:
+        return None
+    if len(v) > max_len:
+        v = v[: max_len - 3] + "..."
+    return v
+
+
+def _safe_int(v: Optional[int]) -> Optional[int]:
+    if v is None:
+        return None
+    try:
+        i = int(v)
+    except Exception:
+        return None
+    return i if i >= 0 else None
+
+
 def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
     """
     Impact (wins logging) commands.
@@ -66,19 +87,26 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
-        # Default actor_person_id to the Discord user if not supplied
+        at = _clean_str(action_type, 80)
+        if not at:
+            await interaction.followup.send("❌ action_type is required (e.g., call, text, door).", ephemeral=True)
+            return
+
+        # Default actor_person_id to the Discord user if not supplied (best-effort).
         linked_person_id: Optional[int] = None
         if actor_person_id is None:
             pid, _, err = await ensure_person_by_discord(bot, interaction)
             if err is None and pid is not None:
                 linked_person_id = pid
                 actor_person_id = pid
-            # If linking fails, we still proceed; backend may accept a null actor
+            # If linking fails, proceed; backend may accept missing actor_person_id.
 
         dt, dt_ok = parse_iso_dt(occurred_at)
+        forced_now = False
         if occurred_at and not dt_ok:
             # If user provided a date but we couldn't parse it, log as "now" explicitly.
             dt = _utcnow_naive()
+            forced_now = True
 
         # If no occurred_at provided at all, let backend default to now by omitting occurred_at.
         qty, qty_warn = clamp_quantity(int(quantity or 1))
@@ -95,19 +123,21 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
                 "interaction_id": str(interaction.id),
             }
         }
-        if note:
-            meta["note"] = note
+
+        clean_note = _clean_str(note, 500)
+        if clean_note:
+            meta["note"] = clean_note
 
         payload: Dict[str, Any] = {
-            "action_type": action_type,
+            "action_type": at,
             "quantity": qty,
-            "actor_person_id": actor_person_id,
-            "power_team_id": team_id,
-            "county_id": county_id,
+            "actor_person_id": _safe_int(actor_person_id),
+            "power_team_id": _safe_int(team_id),
+            "county_id": _safe_int(county_id),
             # Only send occurred_at if user provided one (or it was invalid and we forced now)
             "occurred_at": (dt.isoformat() if (dt and occurred_at) else None),
             "source": "discord",
-            "channel": infer_channel_from_action_type(action_type),
+            "channel": infer_channel_from_action_type(at),
             "idempotency_key": idem,
             "meta": meta,
         }
@@ -122,12 +152,11 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         actor_stage = data.get("actor_stage")
 
         warnings: List[str] = []
-        if occurred_at and not dt_ok:
+        if occurred_at and forced_now:
             warnings.append("⚠️ I couldn't parse your occurred_at date/time. Logged it as *now*.")
         if qty_warn:
             warnings.append(f"⚠️ {qty_warn}")
         if linked_person_id and (actor_person_id == linked_person_id):
-            # Quiet reassurance for the common “I forgot my person_id” case
             warnings.append(f"ℹ️ Linked you as actor_person_id={linked_person_id} (via Discord).")
 
         msg = (
@@ -178,6 +207,7 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         start_dt, start_ok = parse_iso_dt(start)
         end_dt, end_ok = parse_iso_dt(end)
 
+        # Keep UX clean: if filters are invalid, warn once and ignore them.
         if (start and not start_ok) or (end and not end_ok):
             warn = "⚠️ I couldn't parse your date filter(s). "
             if start and not start_ok:
@@ -192,11 +222,14 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         if end_dt:
             params["end"] = end_dt.isoformat()
         if actor_person_id is not None:
-            params["actor_person_id"] = actor_person_id
+            params["actor_person_id"] = _safe_int(actor_person_id)
         if team_id is not None:
-            params["power_team_id"] = team_id
+            params["power_team_id"] = _safe_int(team_id)
         if county_id is not None:
-            params["county_id"] = county_id
+            params["county_id"] = _safe_int(county_id)
+
+        # Drop None values
+        params = {k: v for k, v in params.items() if v is not None}
 
         code, text, data = await api_request(api, "GET", "/impact/reach/summary", params=params, timeout=20)
         if code != 200 or not isinstance(data, dict):
@@ -220,15 +253,15 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
     @app_commands.describe(actor_stage="Optional: your current stage if you know it.")
     async def my_next(interaction: "discord.Interaction", actor_stage: Optional[str] = None) -> None:
         # If they didn't pass stage, try to infer from the linked person record (best-effort)
-        stage = actor_stage
+        stage = (actor_stage or "").strip() or None
         if not stage:
             try:
-                pid, pdata, err = await ensure_person_by_discord(bot, interaction)
+                _, pdata, err = await ensure_person_by_discord(bot, interaction)
                 if err is None and isinstance(pdata, dict):
                     maybe = pdata.get("stage")
                     if isinstance(maybe, str) and maybe.strip():
                         stage = maybe.strip()
             except Exception:
-                stage = actor_stage
+                stage = None
 
         await interaction.response.send_message(next_step_for_stage(stage), ephemeral=True)

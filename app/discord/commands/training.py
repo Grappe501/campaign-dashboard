@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from discord import app_commands
@@ -11,7 +10,29 @@ if TYPE_CHECKING:
     import discord
     import httpx
 
-logger = logging.getLogger(__name__)
+
+def _clamp_limit(limit: Any, default: int = 15, lo: int = 1, hi: int = 25) -> int:
+    try:
+        v = int(limit if limit is not None else default)
+    except Exception:
+        v = default
+    return max(lo, min(v, hi))
+
+
+def _safe_title(x: Any) -> str:
+    s = ("" if x is None else str(x)).strip()
+    return s if s else "(untitled)"
+
+
+def _clean_note(note: Optional[str], max_len: int = 500) -> Optional[str]:
+    if note is None:
+        return None
+    s = str(note).strip()
+    if not s:
+        return None
+    if len(s) > max_len:
+        s = s[: max_len - 3] + "..."
+    return s
 
 
 def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
@@ -33,12 +54,7 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
-        # Clamp for safety
-        try:
-            limit_i = int(limit or 15)
-        except Exception:
-            limit_i = 15
-        limit_i = max(1, min(limit_i, 25))
+        limit_i = _clamp_limit(limit, default=15, lo=1, hi=25)
 
         code, text, data = await api_request(
             api,
@@ -61,18 +77,23 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             return
 
         items = data.get("items") or []
-        if not items:
-            await interaction.followup.send("No trainings found.", ephemeral=True)
+        if not isinstance(items, list) or not items:
+            await interaction.followup.send("📚 Trainings\n- (none found)", ephemeral=True)
             return
 
         lines: List[str] = []
         for it in items[:limit_i]:
-            try:
-                lines.append(f"- id:{it.get('id')}  **{it.get('title')}**  ({it.get('status', 'active')})")
-            except Exception:
+            if not isinstance(it, dict):
                 continue
+            mid = it.get("id")
+            title = _safe_title(it.get("title"))
+            status = (str(it.get("status") or "active")).strip()
+            lines.append(f"- id:{mid}  **{title}**  ({status})")
 
-        await interaction.followup.send("📚 Trainings\n" + "\n".join(lines), ephemeral=True)
+        await interaction.followup.send(
+            "📚 Trainings\n" + ("\n".join(lines) if lines else "- (none found)"),
+            ephemeral=True,
+        )
 
     @tree.command(name="training_complete", description="Mark a training module complete for you (Phase 4).")
     @app_commands.describe(module_id="Training module id", note="Optional note (link, proof, etc.)")
@@ -88,6 +109,16 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
+        # Defensive: ensure positive int
+        try:
+            module_id_i = int(module_id)
+        except Exception:
+            await interaction.followup.send("❌ module_id must be an integer.", ephemeral=True)
+            return
+        if module_id_i < 1:
+            await interaction.followup.send("❌ module_id must be >= 1.", ephemeral=True)
+            return
+
         person_id, _, err = await ensure_person_by_discord(bot, interaction)
         if err or person_id is None:
             await interaction.followup.send("❌ Could not link you to a person record.\n" + (err or ""), ephemeral=True)
@@ -95,10 +126,9 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
 
         payload: Dict[str, Any] = {
             "person_id": person_id,
-            "module_id": module_id,
-            "note": note,
+            "module_id": module_id_i,
+            "note": _clean_note(note),
             "source": "discord",
-            # Optional: include discord metadata for backend audit logging
             "meta": {
                 "discord": {
                     "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
@@ -109,6 +139,9 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
                 }
             },
         }
+
+        # Drop None values from top-level for clean API payloads
+        payload = {k: v for k, v in payload.items() if v is not None}
 
         code, text, data = await api_request(api, "POST", "/training/complete", json=payload, timeout=20)
 
@@ -125,6 +158,6 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             return
 
         await interaction.followup.send(
-            f"✅ Training marked complete.\n- module_id: {module_id}\n- person_id: {person_id}",
+            f"✅ Training marked complete.\n- module_id: {module_id_i}\n- person_id: {person_id}",
             ephemeral=True,
         )

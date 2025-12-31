@@ -25,6 +25,13 @@ def _as_int(x: Any) -> Optional[int]:
     return None
 
 
+def _clean_destination(dest: str, max_len: int = 200) -> str:
+    s = (dest or "").strip()
+    if len(s) > max_len:
+        s = s[: max_len - 3] + "..."
+    return s
+
+
 def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
     """
     Power of 5 commands.
@@ -46,7 +53,16 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
-        code, text, data = await api_request(api, "GET", f"/power5/teams/{int(team_id)}/stats", timeout=15)
+        try:
+            tid = int(team_id)
+        except Exception:
+            await interaction.followup.send("❌ team_id must be an integer.", ephemeral=True)
+            return
+        if tid < 1:
+            await interaction.followup.send("❌ team_id must be >= 1.", ephemeral=True)
+            return
+
+        code, text, data = await api_request(api, "GET", f"/power5/teams/{tid}/stats", timeout=15)
         if code != 200 or not isinstance(data, dict):
             await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)
             return
@@ -65,7 +81,7 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         depth_lines = [f"- depth {k}: {v}" for k, v in sorted(by_depth.items(), key=_depth_key)]
 
         msg = (
-            f"🌟 Power of 5 stats — team_id={team_id}\n"
+            f"🌟 Power of 5 stats — team_id={tid}\n"
             f"Leader person_id: {data.get('leader_person_id')}\n"
             f"Links total: {data.get('links_total')}\n\n"
             "Status counts:\n"
@@ -98,12 +114,21 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
+        try:
+            tid = int(team_id)
+        except Exception:
+            await interaction.followup.send("❌ team_id must be an integer.", ephemeral=True)
+            return
+        if tid < 1:
+            await interaction.followup.send("❌ team_id must be >= 1.", ephemeral=True)
+            return
+
         ch = (channel or "").strip().lower()
         if ch not in ("email", "sms", "discord"):
             await interaction.followup.send("❌ channel must be `email`, `sms`, or `discord`.", ephemeral=True)
             return
 
-        dest = (destination or "").strip()
+        dest = _clean_destination(destination)
         if not dest:
             await interaction.followup.send("❌ destination is required.", ephemeral=True)
             return
@@ -120,18 +145,36 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
                 return
             invited_by_person_id = pid
 
+        try:
+            inviter_id = int(invited_by_person_id)
+        except Exception:
+            await interaction.followup.send("❌ invited_by_person_id must be an integer.", ephemeral=True)
+            return
+        if inviter_id < 1:
+            await interaction.followup.send("❌ invited_by_person_id must be >= 1.", ephemeral=True)
+            return
+
         params: Dict[str, Any] = {
-            "invited_by_person_id": int(invited_by_person_id),
+            "invited_by_person_id": inviter_id,
             "channel": ch,
             "destination": dest,
         }
+
         if invitee_person_id is not None:
-            params["invitee_person_id"] = int(invitee_person_id)
+            try:
+                invitee_i = int(invitee_person_id)
+            except Exception:
+                await interaction.followup.send("❌ invitee_person_id must be an integer.", ephemeral=True)
+                return
+            if invitee_i < 1:
+                await interaction.followup.send("❌ invitee_person_id must be >= 1.", ephemeral=True)
+                return
+            params["invitee_person_id"] = invitee_i
 
         code, text, data = await api_request(
             api,
             "POST",
-            f"/power5/teams/{int(team_id)}/invites",
+            f"/power5/teams/{tid}/invites",
             params=params,
             timeout=20,
         )
@@ -150,8 +193,8 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             return
 
         msg = (
-            f"✅ Invite created — team_id={team_id}\n"
-            f"- invited_by_person_id: {invited_by_person_id}\n"
+            f"✅ Invite created — team_id={tid}\n"
+            f"- invited_by_person_id: {inviter_id}\n"
             f"- channel: {ch}\n"
             f"- destination: {dest}\n"
             f"- expires_at: {expires_at}\n\n"
@@ -185,6 +228,18 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
+        try:
+            tid = int(team_id)
+            parent_id = int(parent_person_id)
+            child_id = int(child_person_id)
+        except Exception:
+            await interaction.followup.send("❌ team_id, parent_person_id, and child_person_id must be integers.", ephemeral=True)
+            return
+
+        if tid < 1 or parent_id < 1 or child_id < 1:
+            await interaction.followup.send("❌ IDs must be >= 1.", ephemeral=True)
+            return
+
         st = (status or "").strip().lower()
         if st not in ("invited", "onboarded", "active", "churned"):
             await interaction.followup.send(
@@ -194,16 +249,16 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             return
 
         payload: Dict[str, Any] = {
-            "power_team_id": int(team_id),
-            "parent_person_id": int(parent_person_id),
-            "child_person_id": int(child_person_id),
+            "power_team_id": tid,
+            "parent_person_id": parent_id,
+            "child_person_id": child_id,
             "status": st,
         }
 
         code, text, data = await api_request(
             api,
             "POST",
-            f"/power5/teams/{int(team_id)}/links",
+            f"/power5/teams/{tid}/links",
             json=payload,
             timeout=20,
         )
@@ -231,7 +286,16 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
-        code, text, data = await api_request(api, "GET", f"/power5/teams/{int(team_id)}/tree", timeout=20)
+        try:
+            tid = int(team_id)
+        except Exception:
+            await interaction.followup.send("❌ team_id must be an integer.", ephemeral=True)
+            return
+        if tid < 1:
+            await interaction.followup.send("❌ team_id must be >= 1.", ephemeral=True)
+            return
+
+        code, text, data = await api_request(api, "GET", f"/power5/teams/{tid}/tree", timeout=20)
         if code != 200 or not isinstance(data, dict):
             await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)
             return

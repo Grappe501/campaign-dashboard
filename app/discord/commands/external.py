@@ -11,9 +11,12 @@ if TYPE_CHECKING:
     import httpx
 
 
-def _safe_str(x: Any) -> str:
+def _safe_str(x: Any, max_len: int = 200) -> str:
     s = "" if x is None else str(x)
-    return s.strip()
+    s = s.strip()
+    if len(s) > max_len:
+        s = s[: max_len - 3] + "..."
+    return s
 
 
 def _digits_only(s: str) -> str:
@@ -24,7 +27,7 @@ def _normalize_state_fips(raw: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Returns (state_fips_2, error_msg_or_none)
     """
-    s = _digits_only(_safe_str(raw))
+    s = _digits_only(_safe_str(raw, 20))
     if not s:
         return None, "❌ state_fips is required (AR = 05)."
     if len(s) > 2:
@@ -36,7 +39,7 @@ def _normalize_county_fips(raw: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Returns (county_fips_3, error_msg_or_none)
     """
-    s = _digits_only(_safe_str(raw))
+    s = _digits_only(_safe_str(raw, 20))
     if not s:
         return None, "❌ county_fips is required (3 digits, e.g., Pulaski = 119)."
     if len(s) > 3:
@@ -44,13 +47,29 @@ def _normalize_county_fips(raw: str) -> Tuple[Optional[str], Optional[str]]:
     return s.zfill(3), None
 
 
-def _normalize_year(raw: str, default: int, min_year: int, max_year: int) -> int:
-    s = _digits_only(_safe_str(raw))
+def _normalize_year(raw: str, *, default: int, min_year: int, max_year: int) -> int:
+    s = _digits_only(_safe_str(raw, 32))
     try:
         y = int(s) if s else int(default)
     except Exception:
         y = int(default)
     return max(min_year, min(y, max_year))
+
+
+def _normalize_series_id(raw: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Basic safety validation for BLS series id.
+    - trimmed
+    - capped length
+    - must be non-empty
+    """
+    sid = _safe_str(raw, 64)
+    if not sid:
+        return None, "❌ series_id is required."
+    # Keep permissive; BLS IDs are often alphanumeric with punctuation. Just avoid absurd lengths.
+    if len(sid) < 5:
+        return None, "❌ series_id looks too short. Please paste a full BLS series id."
+    return sid, None
 
 
 def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
@@ -94,7 +113,8 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send(err, ephemeral=True)
             return
 
-        y = _normalize_year(year, default=2023, min_year=2010, max_year=2100)
+        # ACS bounds: keep permissive but not absurd/future-proof. (Backend can still reject if unavailable.)
+        y = _normalize_year(year, default=2023, min_year=2005, max_year=2100)
 
         params = {"state_fips": sf, "county_fips": cf, "year": str(y)}
         code, text, data = await api_request(
@@ -117,15 +137,11 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)
             return
 
-        name = _safe_str(data.get("name")) or f"FIPS {sf}-{cf}"
-        yr = _safe_str(data.get("year")) or str(y)
+        name = _safe_str(data.get("name"), 120) or f"FIPS {sf}-{cf}"
+        yr = _safe_str(data.get("year"), 16) or str(y)
         pop = data.get("total_population")
 
-        msg = (
-            f"🏛️ Census ACS {yr}\n"
-            f"{name}\n"
-            f"Total population: {pop}"
-        )
+        msg = f"🏛️ Census ACS {yr}\n{name}\nTotal population: {pop}"
         await interaction.followup.send(msg, ephemeral=True)
 
     @tree.command(
@@ -150,9 +166,9 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
-        sid = _safe_str(series_id)
-        if not sid:
-            await interaction.followup.send("❌ series_id is required.", ephemeral=True)
+        sid, sid_err = _normalize_series_id(series_id)
+        if sid_err:
+            await interaction.followup.send(sid_err, ephemeral=True)
             return
 
         sy = _normalize_year(start_year, default=2022, min_year=1900, max_year=2100)
@@ -183,13 +199,13 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)
             return
 
-        # Backend returns: {"results": {...}} (mirrors BLS API shape)
+        # Backend returns: {"results": {...}} (mirrors BLS API-ish shape)
         results = data.get("results")
         if not isinstance(results, dict):
             await interaction.followup.send("📊 BLS: response received but missing `results`.", ephemeral=True)
             return
 
-        title = _safe_str(results.get("seriesID")) or sid
+        title = _safe_str(results.get("seriesID"), 80) or sid
         points = results.get("data") if isinstance(results.get("data"), list) else []
         shown = points[:5]
 
@@ -197,9 +213,9 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         for p in shown:
             if not isinstance(p, dict):
                 continue
-            yr = _safe_str(p.get("year"))
-            per = _safe_str(p.get("periodName"))
-            val = _safe_str(p.get("value"))
+            yr = _safe_str(p.get("year"), 8)
+            per = _safe_str(p.get("periodName"), 24)
+            val = _safe_str(p.get("value"), 24)
             if yr or per or val:
                 lines.append(f"{yr}-{per}: {val}".strip("-: "))
 

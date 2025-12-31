@@ -6,10 +6,8 @@ Design goals:
 - Allow commands to be split into app.discord.commands.* without changing external imports.
 """
 
-from .bot import DashboardBot, bot, run_bot  # re-export for convenience
+from __future__ import annotations
 
-__all__ = [
-    "DashboardBot",
-    "bot",
-    "run_bot",
-]
+from .bot import DashboardBot, bot, run_bot
+
+__all__ = ["DashboardBot", "bot", "run_bot"]

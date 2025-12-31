@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
 from typing import Dict, Optional
 
 import discord
 import httpx
 from discord import app_commands
 
-from ..config.settings import settings
 from .commands import register_all
 from .commands.shared import api_request  # single source of truth for bot->API calls
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,8 @@ class DashboardBot(discord.Client):
 
     Notes:
     - discord.Client uses its own internal HTTP client for Discord.
-    - We keep a separate httpx AsyncClient as self.api for dashboard backend calls.
+    - We keep a separate httpx.AsyncClient as self.api for dashboard backend calls.
+    - All bot->backend HTTP calls must go through commands.shared.api_request.
     """
 
     # Wins debounce / cache controls
@@ -53,9 +53,13 @@ class DashboardBot(discord.Client):
     async def setup_hook(self) -> None:
         # Initialize API client once
         if self.api is None:
+            # Keep defaults conservative; dashboard API is internal and should be reliable.
+            limits = httpx.Limits(max_connections=25, max_keepalive_connections=10)
             self.api = httpx.AsyncClient(
                 timeout=float(settings.http_timeout_s),
                 headers={"User-Agent": settings.http_user_agent},
+                limits=limits,
+                follow_redirects=True,
             )
 
         # Register slash commands from modular command files
@@ -103,36 +107,30 @@ class DashboardBot(discord.Client):
         if not self._wins_recent_keys:
             return
 
-        # Hard safety: if we ever balloon, trim after pruning.
-        if len(self._wins_recent_keys) >= self._WINS_CACHE_HARD_LIMIT:
-            logger.warning(
-                "wins debounce cache exceeded hard limit (%s); trimming",
-                self._WINS_CACHE_HARD_LIMIT,
-            )
-
         if len(self._wins_recent_keys) < self._WINS_CACHE_SOFT_LIMIT:
             return
 
         cutoff = now_ts - float(self._WINS_DEBOUNCE_TTL_S)
-        pruned = {k: ts for k, ts in self._wins_recent_keys.items() if ts >= cutoff}
-        self._wins_recent_keys = pruned
+        self._wins_recent_keys = {k: ts for k, ts in self._wins_recent_keys.items() if ts >= cutoff}
 
-        # If still huge (e.g., high-traffic server in <TTL window), trim deterministically.
+        # Hard safety: if we ever balloon, trim deterministically.
         if len(self._wins_recent_keys) > self._WINS_CACHE_HARD_LIMIT:
-            # Keep the most recent timestamps
+            logger.warning(
+                "wins debounce cache exceeded hard limit (%s); trimming",
+                self._WINS_CACHE_HARD_LIMIT,
+            )
             items = sorted(self._wins_recent_keys.items(), key=lambda kv: kv[1], reverse=True)
             self._wins_recent_keys = dict(items[: self._WINS_CACHE_HARD_LIMIT])
 
     async def on_message(self, message: discord.Message) -> None:
         """
-        Phase 4: Wins automation
+        Phase 4/5: Wins automation
         - Watches for trigger emoji (optionally only in a specific channel)
         - POSTs to /wins/ingest (best-effort; safe to ignore if endpoint not present)
         """
         if not settings.enable_wins_automation:
             return
 
-        # If misconfigured (empty emoji), do nothing
         trigger = (settings.wins_trigger_emoji or "").strip()
         if not trigger:
             return
@@ -172,9 +170,7 @@ class DashboardBot(discord.Client):
                 "channel_id": str(message.channel.id),
                 "channel_name": getattr(message.channel, "name", None),
                 "content": content[:1200],
-                "created_at": (
-                    message.created_at.replace(tzinfo=None).isoformat() if message.created_at else None
-                ),
+                "created_at": (message.created_at.replace(tzinfo=None).isoformat() if message.created_at else None),
                 "source": "discord",
                 "trigger_emoji": trigger,
             }
@@ -190,6 +186,7 @@ class DashboardBot(discord.Client):
 
         except Exception:
             # Never let automation break normal bot operation
+            logger.exception("Wins automation error (ignored).")
             return
 
 

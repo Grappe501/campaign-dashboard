@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple
 
 import discord
 import httpx
@@ -27,59 +27,108 @@ logger = logging.getLogger(__name__)
 # Role guards (Discord-side)
 # -----------------------------
 
-ADMIN_ROLES: List[str] = split_csv(settings.admin_roles_raw)
-LEAD_ROLES: List[str] = split_csv(settings.lead_roles_raw)  # reserved (future lead gating)
+
+def _normalize_name(s: str) -> str:
+    return (s or "").strip().lower()
 
 
-def _member_has_any_role(member: discord.abc.User, role_specs: List[str]) -> bool:
-    if not role_specs:
+def _parse_role_specs(role_specs: List[str]) -> Tuple[Set[int], Set[str]]:
+    """
+    Parse a list of role specs into (role_ids, role_names_normalized).
+
+    Specs can be:
+      - numeric role IDs: "1234567890"
+      - role names: "Admin", "Campaign Admin"
+    """
+    role_ids: Set[int] = set()
+    role_names: Set[str] = set()
+
+    for spec in role_specs or []:
+        raw = (spec or "").strip()
+        if not raw:
+            continue
+        if raw.isdigit():
+            try:
+                role_ids.add(int(raw))
+            except Exception:
+                continue
+        else:
+            role_names.add(_normalize_name(raw))
+
+    return role_ids, role_names
+
+
+# Evaluate configured role specs at import time (settings are env-backed and immutable per-process)
+ADMIN_ROLE_SPECS: List[str] = split_csv(settings.admin_roles_raw)
+LEAD_ROLE_SPECS: List[str] = split_csv(settings.lead_roles_raw)  # reserved for future lead gating
+
+_ADMIN_ROLE_IDS, _ADMIN_ROLE_NAMES = _parse_role_specs(ADMIN_ROLE_SPECS)
+_LEAD_ROLE_IDS, _LEAD_ROLE_NAMES = _parse_role_specs(LEAD_ROLE_SPECS)  # reserved (unused currently)
+
+
+def _member_has_any_role(member: discord.abc.User, role_ids: Set[int], role_names: Set[str]) -> bool:
+    """
+    Check whether a member has ANY of the specified role ids or names.
+    Fail-closed: returns False if user isn't a guild Member or if no specs provided.
+    """
+    if not role_ids and not role_names:
         return False
     if not isinstance(member, discord.Member):
         return False
 
-    role_ids: set[int] = set()
-    role_names: set[str] = set()
-
-    for spec in role_specs:
-        spec = (spec or "").strip()
-        if not spec:
-            continue
-        if spec.isdigit():
-            role_ids.add(int(spec))
-        else:
-            role_names.add(spec.lower())
-
     for r in getattr(member, "roles", []) or []:
         try:
-            if r.id in role_ids:
+            if role_ids and int(getattr(r, "id", 0)) in role_ids:
                 return True
-            if (r.name or "").lower() in role_names:
+            if role_names and _normalize_name(getattr(r, "name", "")) in role_names:
                 return True
         except Exception:
             continue
+
     return False
 
 
 def _is_admin(interaction: "Interaction") -> bool:
     """
-    Admin guard:
-      - If ADMIN_ROLES configured: role-based
-      - Else fallback: Manage Guild or Administrator permission
-    """
-    u = interaction.user
-    if ADMIN_ROLES:
-        return _member_has_any_role(u, ADMIN_ROLES)
+    Admin guard (fail-closed):
 
-    if isinstance(u, discord.Member):
-        perms = u.guild_permissions
-        return bool(perms.administrator or perms.manage_guild)
-    return False
+    - Must be invoked in a guild by a Member.
+    - If DASHBOARD_ADMIN_ROLES is configured: role-based ONLY.
+    - Else fallback: Manage Guild or Administrator permission.
+    """
+    guild = interaction.guild
+    u = interaction.user
+
+    # Fail-closed: no guild => no admin
+    if guild is None:
+        return False
+    if not isinstance(u, discord.Member):
+        return False
+
+    # If admin roles are configured, we ONLY accept those (deterministic, no surprises).
+    if _ADMIN_ROLE_IDS or _ADMIN_ROLE_NAMES:
+        return _member_has_any_role(u, _ADMIN_ROLE_IDS, _ADMIN_ROLE_NAMES)
+
+    # Fallback (only when no roles configured)
+    perms = u.guild_permissions
+    return bool(perms.administrator or perms.manage_guild)
 
 
 def _guard(check_fn: Callable[["Interaction"], bool], fail_msg: str):
+    """
+    app_commands.check wrapper that also sends an ephemeral failure message.
+    """
+
     async def predicate(interaction: "Interaction") -> bool:
-        if check_fn(interaction):
+        ok = False
+        try:
+            ok = bool(check_fn(interaction))
+        except Exception:
+            ok = False
+
+        if ok:
             return True
+
         try:
             if interaction.response.is_done():
                 await interaction.followup.send(fail_msg, ephemeral=True)
@@ -93,27 +142,38 @@ def _guard(check_fn: Callable[["Interaction"], bool], fail_msg: str):
 
 
 # -----------------------------
-# Role sync on approve (best-effort)
+# Role sync on approve (best-effort, safe)
 # -----------------------------
+
 
 def _find_role(guild: discord.Guild, role_name: str) -> Optional[discord.Role]:
     """
-    Find a role by name, case-insensitive.
+    Find a role by name, case-insensitive (exact match first, then normalized scan).
     """
     if not role_name:
         return None
 
-    # Fast path: exact match
     role = discord.utils.get(guild.roles, name=role_name)
     if role is not None:
         return role
 
-    # Case-insensitive fallback
-    target = role_name.strip().lower()
+    target = _normalize_name(role_name)
     for r in guild.roles:
-        if (r.name or "").strip().lower() == target:
+        if _normalize_name(r.name) == target:
             return r
     return None
+
+
+def _is_disallowed_role(guild: discord.Guild, role: discord.Role) -> bool:
+    """
+    Prevent acting on roles that Discord either forbids or that are risky.
+    """
+    # @everyone role id == guild id
+    if role.id == guild.id:
+        return True
+    if getattr(role, "managed", False):
+        return True
+    return False
 
 
 def _bot_can_manage_role(me: discord.Member, role: discord.Role) -> bool:
@@ -163,11 +223,12 @@ async def _apply_role_for_approval(
     """
     Best-effort: apply the configured Discord role matching the request type to the target user.
 
-    Requires:
-      - guild interaction
-      - Manage Roles permission for the bot
-      - role exists in server
-      - role is below bot's top role
+    Hardening:
+      - Fail-closed on missing guild/member/bot perms
+      - Disallow @everyone/managed roles
+      - Do not attempt changes if not manageable
+      - Return role name if applied or already present
+      - Raise RuntimeError with a user-safe message if a specific constraint prevents syncing
     """
     guild = interaction.guild
     if guild is None:
@@ -180,7 +241,6 @@ async def _apply_role_for_approval(
     if not target_discord_user_id or not target_discord_user_id.isdigit():
         return None
 
-    # Resolve bot member reliably (avoid guild.me quirks / deprecations)
     bot_user = getattr(interaction.client, "user", None)
     me = await _resolve_bot_member(guild, bot_user)
     if me is None:
@@ -192,10 +252,11 @@ async def _apply_role_for_approval(
     if role is None:
         raise RuntimeError(f"Role '{role_name}' not found in this server.")
 
+    if _is_disallowed_role(guild, role):
+        raise RuntimeError(f"Role '{role.name}' cannot be managed (@everyone/managed role).")
+
     if not _bot_can_manage_role(me, role):
-        raise RuntimeError(
-            f"Bot cannot manage role '{role.name}' (check role hierarchy: bot top role must be ABOVE it)."
-        )
+        raise RuntimeError(f"Bot cannot manage role '{role.name}' (check role hierarchy).")
 
     member = guild.get_member(int(target_discord_user_id))
     if member is None:
@@ -214,13 +275,14 @@ async def _apply_role_for_approval(
         return role.name
     except discord.Forbidden:
         raise RuntimeError("Discord denied role change (permissions/hierarchy).")
-    except Exception as e:
-        raise RuntimeError(f"Failed to apply role: {e}")
+    except Exception:
+        raise RuntimeError("Failed to apply role due to an unexpected Discord error.")
 
 
 # -----------------------------
 # UI Components (Approvals)
 # -----------------------------
+
 
 class _ReviewReasonModal(discord.ui.Modal):
     def __init__(
@@ -249,15 +311,18 @@ class _ReviewReasonModal(discord.ui.Modal):
     async def on_submit(self, interaction: "Interaction") -> None:
         await interaction.response.defer(ephemeral=True)
 
+        # Guard again (buttons can be clicked later; do not trust view creation time).
+        if not _is_admin(interaction):
+            await interaction.followup.send("❌ Admin only.", ephemeral=True)
+            return
+
         reason = (str(self.reason.value).strip() if self.reason.value is not None else "").strip() or None
 
-        # Modal runs on the active bot client
         api: Optional[httpx.AsyncClient] = getattr(interaction.client, "api", None)  # type: ignore[attr-defined]
         if api is None:
             await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
             return
 
-        # shared.ensure_person_by_discord accepts (api_client, interaction)
         reviewer_person_id, _, err = await ensure_person_by_discord(api, interaction)
         if err or reviewer_person_id is None:
             await interaction.followup.send(
@@ -267,6 +332,7 @@ class _ReviewReasonModal(discord.ui.Modal):
             return
 
         payload = {"reviewer_person_id": reviewer_person_id, "decision": self.decision, "reason": reason}
+
         code, text, data = await api_request(
             api,
             "POST",
@@ -355,6 +421,7 @@ class ApprovalsReviewView(discord.ui.View):
 # -----------------------------
 # Public register()
 # -----------------------------
+
 
 def register(bot: "discord.Client", tree: "app_commands_typing.CommandTree") -> None:
     """
@@ -504,7 +571,6 @@ def register(bot: "discord.Client", tree: "app_commands_typing.CommandTree") -> 
             await interaction.followup.send("❌ decision must be `approve` or `deny`.", ephemeral=True)
             return
 
-        # shared.ensure_person_by_discord accepts (api_client, interaction)
         reviewer_person_id, _, err = await ensure_person_by_discord(api, interaction)
         if err or reviewer_person_id is None:
             await interaction.followup.send(
@@ -514,6 +580,7 @@ def register(bot: "discord.Client", tree: "app_commands_typing.CommandTree") -> 
             return
 
         payload = {"reviewer_person_id": reviewer_person_id, "decision": d, "reason": reason}
+
         code, text, data = await api_request(api, "POST", f"/approvals/{approval_id}/review", json=payload, timeout=25)
         if code != 200 or not isinstance(data, dict):
             await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)

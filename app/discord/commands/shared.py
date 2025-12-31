@@ -6,20 +6,24 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_ch
 
 import httpx
 
-from ...config.settings import settings
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 # NOTE:
 # Keep this module dependency-light (no discord import).
-# This file is the single source of truth for bot->backend HTTP behavior.
+# This file is the single source of truth for bot->backend HTTP behavior and shared helpers.
 
 # Stable API base (evaluated at import time from env-backed settings)
-API_BASE = settings.dashboard_api_base.rstrip("/")
+API_BASE = (settings.dashboard_api_base or "").rstrip("/")
 
 # HTTP defaults
 DEFAULT_TIMEOUT_S = float(settings.http_timeout_s)
 DEFAULT_UA = settings.http_user_agent
+
+# Hard bounds to prevent misconfig from wedging the bot.
+_MIN_TIMEOUT_S = 1.0
+_MAX_TIMEOUT_S = 120.0
 
 
 # -----------------------------
@@ -146,12 +150,23 @@ def clamp_quantity(qty: int) -> Tuple[int, Optional[str]]:
 
 
 def format_api_error(code: int, text: str, data: Optional[dict]) -> str:
+    """
+    User-facing API error formatting. Keep messages actionable and avoid leaking internals.
+    """
     detail = None
     if isinstance(data, dict):
         detail = data.get("detail")
-    if detail:
-        return f"❌ Error ({code}): {detail}"
-    return f"❌ Error ({code}): {truncate(text)}"
+
+    # Prefer structured detail from API if present.
+    if isinstance(detail, str) and detail.strip():
+        return f"❌ Error ({code}): {detail.strip()}"
+
+    # Otherwise, keep the raw text short.
+    safe_text = truncate((text or "").strip(), 500)
+    if safe_text:
+        return f"❌ Error ({code}): {safe_text}"
+
+    return f"❌ Error ({code})."
 
 
 # -----------------------------
@@ -171,6 +186,44 @@ def _safe_json(r: httpx.Response) -> Optional[dict]:
     return payload if isinstance(payload, dict) else None
 
 
+def _normalize_timeout(timeout: float) -> float:
+    """
+    Clamp timeouts into a safe range.
+    """
+    try:
+        t = float(timeout)
+    except Exception:
+        t = DEFAULT_TIMEOUT_S
+
+    if t < _MIN_TIMEOUT_S:
+        return _MIN_TIMEOUT_S
+    if t > _MAX_TIMEOUT_S:
+        return _MAX_TIMEOUT_S
+    return t
+
+
+def _normalize_path(path: str) -> str:
+    """
+    Ensure we only ever call our API base with a normal absolute path.
+    """
+    p = (path or "").strip()
+    if not p:
+        return "/"
+    # Reject full URLs to prevent SSRF/accidental overrides.
+    if p.startswith("http://") or p.startswith("https://"):
+        raise ValueError("path must be a relative API path, not a full URL")
+    return p if p.startswith("/") else f"/{p}"
+
+
+def _normalize_method(method: str) -> str:
+    m = (method or "GET").strip().upper()
+    allowed = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    if m not in allowed:
+        # Fail closed: callers must use known HTTP verbs.
+        raise ValueError(f"Unsupported HTTP method: {m}")
+    return m
+
+
 async def api_request(
     client: httpx.AsyncClient,
     method: str,
@@ -183,20 +236,40 @@ async def api_request(
     """
     Low-level request helper used by all command modules.
     Returns: (status_code, response_text, json_dict_or_none)
+
+    Phase 5.2 hardening:
+    - clamped timeouts
+    - normalized paths/methods
+    - consistent headers (User-Agent)
+    - user-safe error messages
     """
-    m = (method or "GET").strip().upper()
-    p = path if (path or "").startswith("/") else f"/{path}"
-    url = f"{API_BASE}{p}"
+    # Minimal sanity check: API_BASE must exist (settings.validate enforces this).
+    if not API_BASE:
+        return 500, "Bot misconfiguration: API base URL is missing.", None
 
     try:
-        r = await client.request(m, url, params=params, json=json, timeout=float(timeout))
+        m = _normalize_method(method)
+        p = _normalize_path(path)
+    except ValueError as e:
+        logger.warning("api_request invalid input: method=%r path=%r err=%s", method, path, e)
+        return 400, "Bot misconfiguration: invalid API request parameters.", None
+
+    url = f"{API_BASE}{p}"
+
+    headers = {"User-Agent": DEFAULT_UA} if DEFAULT_UA else None
+    t = _normalize_timeout(timeout)
+
+    try:
+        r = await client.request(m, url, params=params, json=json, timeout=t, headers=headers)
     except httpx.TimeoutException:
         return 408, "Request timed out contacting API.", None
-    except httpx.RequestError as e:
-        return 503, f"Network error contacting API: {e}", None
-    except Exception as e:
-        logger.exception("Unexpected error contacting API (%s %s): %s", m, url, e)
-        return 500, f"Unexpected error contacting API: {e}", None
+    except httpx.RequestError:
+        # Avoid leaking internal exception text to volunteers; log it for operators.
+        logger.warning("Network error contacting API (%s %s)", m, url, exc_info=True)
+        return 503, "Network error contacting API. Please try again in a moment.", None
+    except Exception:
+        logger.exception("Unexpected error contacting API (%s %s)", m, url)
+        return 500, "Unexpected error contacting API. Please try again.", None
 
     return r.status_code, r.text, _safe_json(r)
 
@@ -218,10 +291,15 @@ async def ensure_person_by_discord(
     if api is None:
         return None, None, "Bot API client is not initialized."
 
+    # Defensive: keep payload minimal and stable.
     payload: Dict[str, Any] = {
-        "discord_user_id": str(interaction.user.id),
-        "name": interaction.user.display_name,
+        "discord_user_id": str(getattr(interaction.user, "id", "")),
+        "name": getattr(interaction.user, "display_name", "") or getattr(interaction.user, "name", ""),
     }
+
+    # Discord snowflake must be present.
+    if not payload["discord_user_id"]:
+        return None, None, "Could not identify your Discord user id."
 
     code, text, data = await api_request(api, "POST", "/people/discord/upsert", json=payload, timeout=15)
     if code != 200 or not isinstance(data, dict):
