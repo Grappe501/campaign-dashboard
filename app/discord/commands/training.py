@@ -1,163 +1,141 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from discord import app_commands
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field as PydField
+from sqlmodel import Session, select
 
-from .shared import api_request, ensure_person_by_discord, format_api_error
+from app.database import get_db
+from app.models.person import Person
+from app.models.training_completion import TrainingCompletion
+from app.models.training_module import TrainingModule
 
-if TYPE_CHECKING:
-    import discord
-    import httpx
-
-
-def _clamp_limit(limit: Any, default: int = 15, lo: int = 1, hi: int = 25) -> int:
-    try:
-        v = int(limit if limit is not None else default)
-    except Exception:
-        v = default
-    return max(lo, min(v, hi))
+router = APIRouter(prefix="/training", tags=["training"])
 
 
-def _safe_title(x: Any) -> str:
-    s = ("" if x is None else str(x)).strip()
-    return s if s else "(untitled)"
+class TrainingCompleteRequest(BaseModel):
+    person_id: int = PydField(..., ge=1)
+    module_id: Optional[int] = PydField(None, ge=1)
+    module_slug: Optional[str] = None
+    note: Optional[str] = None
 
 
-def _clean_note(note: Optional[str], max_len: int = 500) -> Optional[str]:
-    if note is None:
-        return None
-    s = str(note).strip()
+def _clean_slug(s: Optional[str]) -> Optional[str]:
     if not s:
         return None
-    if len(s) > max_len:
-        s = s[: max_len - 3] + "..."
-    return s
+    out = s.strip().lower()
+    return out or None
 
 
-def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
+@router.get("/modules")
+def list_training_modules(
+    *,
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
     """
-    Training / SOP System commands.
+    Return available training modules for volunteers.
 
-    Provides:
-      - /trainings         (GET  /training/modules)
-      - /training_complete (POST /training/complete)
+    Used by Discord bot command:
+      /trainings
     """
+    modules: List[TrainingModule] = db.exec(
+        select(TrainingModule)
+        .where(TrainingModule.is_active == True)  # noqa: E712
+        .order_by(TrainingModule.sort_order, TrainingModule.id)
+        .limit(limit)
+    ).all()
 
-    @tree.command(name="trainings", description="List training modules (Phase 4).")
-    @app_commands.describe(limit="Max items (default 15)")
-    async def trainings(interaction: "discord.Interaction", limit: int = 15) -> None:
-        await interaction.response.defer(ephemeral=True)
+    return {
+        "items": [
+            {
+                "id": m.id,
+                "slug": m.slug,
+                "title": m.title,
+                "description": m.description,
+                "estimated_minutes": m.estimated_minutes,
+            }
+            for m in modules
+        ]
+    }
 
-        api: Optional["httpx.AsyncClient"] = getattr(bot, "api", None)
-        if api is None:
-            await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
-            return
 
-        limit_i = _clamp_limit(limit, default=15, lo=1, hi=25)
+@router.post("/complete")
+def complete_training_module(
+    *,
+    db: Session = Depends(get_db),
+    payload: TrainingCompleteRequest,
+) -> Dict[str, Any]:
+    """
+    Mark a training module as completed by a person.
 
-        code, text, data = await api_request(
-            api,
-            "GET",
-            "/training/modules",
-            params={"limit": limit_i},
-            timeout=20,
+    Expected request body:
+      {
+        "person_id": 123,
+        "module_id": 5,         # OR module_slug
+        "module_slug": "sop-101",
+        "note": "optional"
+      }
+
+    Used by Discord bot command:
+      /training_complete
+    """
+    person_id = payload.person_id
+    person = db.get(Person, person_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    module: Optional[TrainingModule] = None
+
+    if payload.module_id is not None:
+        module = db.get(TrainingModule, payload.module_id)
+
+    if module is None:
+        slug = _clean_slug(payload.module_slug)
+        if slug:
+            module = db.exec(select(TrainingModule).where(TrainingModule.slug == slug)).first()
+
+    if not module:
+        raise HTTPException(status_code=404, detail="Training module not found")
+
+    existing = db.exec(
+        select(TrainingCompletion).where(
+            TrainingCompletion.person_id == person_id,
+            TrainingCompletion.module_id == module.id,
         )
+    ).first()
 
-        # Graceful if endpoint not shipped yet
-        if code in (404, 405):
-            await interaction.followup.send(
-                "⚠️ Training API not available yet (endpoint pending: `/training/modules`).",
-                ephemeral=True,
-            )
-            return
-
-        if code != 200 or not isinstance(data, dict):
-            await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)
-            return
-
-        items = data.get("items") or []
-        if not isinstance(items, list) or not items:
-            await interaction.followup.send("📚 Trainings\n- (none found)", ephemeral=True)
-            return
-
-        lines: List[str] = []
-        for it in items[:limit_i]:
-            if not isinstance(it, dict):
-                continue
-            mid = it.get("id")
-            title = _safe_title(it.get("title"))
-            status = (str(it.get("status") or "active")).strip()
-            lines.append(f"- id:{mid}  **{title}**  ({status})")
-
-        await interaction.followup.send(
-            "📚 Trainings\n" + ("\n".join(lines) if lines else "- (none found)"),
-            ephemeral=True,
-        )
-
-    @tree.command(name="training_complete", description="Mark a training module complete for you (Phase 4).")
-    @app_commands.describe(module_id="Training module id", note="Optional note (link, proof, etc.)")
-    async def training_complete(
-        interaction: "discord.Interaction",
-        module_id: int,
-        note: Optional[str] = None,
-    ) -> None:
-        await interaction.response.defer(ephemeral=True)
-
-        api: Optional["httpx.AsyncClient"] = getattr(bot, "api", None)
-        if api is None:
-            await interaction.followup.send("❌ Bot API client is not initialized.", ephemeral=True)
-            return
-
-        # Defensive: ensure positive int
-        try:
-            module_id_i = int(module_id)
-        except Exception:
-            await interaction.followup.send("❌ module_id must be an integer.", ephemeral=True)
-            return
-        if module_id_i < 1:
-            await interaction.followup.send("❌ module_id must be >= 1.", ephemeral=True)
-            return
-
-        person_id, _, err = await ensure_person_by_discord(bot, interaction)
-        if err or person_id is None:
-            await interaction.followup.send("❌ Could not link you to a person record.\n" + (err or ""), ephemeral=True)
-            return
-
-        payload: Dict[str, Any] = {
+    if existing:
+        return {
+            "status": "already_completed",
             "person_id": person_id,
-            "module_id": module_id_i,
-            "note": _clean_note(note),
-            "source": "discord",
-            "meta": {
-                "discord": {
-                    "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
-                    "channel_id": str(interaction.channel_id) if interaction.channel_id else None,
-                    "user_id": str(interaction.user.id) if interaction.user else None,
-                    "username": str(interaction.user) if interaction.user else None,
-                    "interaction_id": str(interaction.id),
-                }
-            },
+            "module_id": module.id,
+            "module_slug": module.slug,
+            "completed_at": existing.completed_at.isoformat(),
         }
 
-        # Drop None values from top-level for clean API payloads
-        payload = {k: v for k, v in payload.items() if v is not None}
+    completion = TrainingCompletion(
+        person_id=person_id,
+        module_id=int(module.id),
+        completed_at=datetime.utcnow(),
+        note=payload.note,
+    )
 
-        code, text, data = await api_request(api, "POST", "/training/complete", json=payload, timeout=20)
+    try:
+        completion.validate()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-        # Graceful if endpoint not shipped yet
-        if code in (404, 405):
-            await interaction.followup.send(
-                "⚠️ Training completion API not available yet (endpoint pending: `/training/complete`).",
-                ephemeral=True,
-            )
-            return
+    db.add(completion)
+    db.commit()
+    db.refresh(completion)
 
-        if code != 200 or not isinstance(data, dict):
-            await interaction.followup.send(format_api_error(code, text, data), ephemeral=True)
-            return
-
-        await interaction.followup.send(
-            f"✅ Training marked complete.\n- module_id: {module_id_i}\n- person_id: {person_id}",
-            ephemeral=True,
-        )
+    return {
+        "status": "completed",
+        "person_id": person_id,
+        "module_id": module.id,
+        "module_slug": module.slug,
+        "completed_at": completion.completed_at.isoformat(),
+    }

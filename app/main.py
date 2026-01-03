@@ -24,6 +24,9 @@ from .api.impact import router as impact_router
 from .api.bootstrap import router as bootstrap_router
 from .api.approvals import router as approvals_router
 
+# Milestone 4 routers
+from .api.training import router as training_router
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,6 +135,9 @@ def create_app() -> FastAPI:
     app.include_router(impact_router)
     app.include_router(bootstrap_router)
     app.include_router(approvals_router)
+
+    # Milestone 4: Training / SOP system
+    app.include_router(training_router)
 
     return app
 

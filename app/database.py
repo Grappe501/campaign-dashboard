@@ -171,6 +171,10 @@ def register_models() -> None:
     # Approvals (Milestone 3 gating)
     from .models.approval_request import ApprovalRequest  # noqa: F401
 
+    # Milestone 4: Training / SOP
+    from .models.training_module import TrainingModule  # noqa: F401
+    from .models.training_completion import TrainingCompletion  # noqa: F401
+
 
 # ---------------------------------------------------------------------
 # SQLite micro-migrations (ADD COLUMN only)
