@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -13,9 +14,6 @@ logger = logging.getLogger(__name__)
 # NOTE:
 # Keep this module dependency-light (no discord import).
 # This file is the single source of truth for bot->backend HTTP behavior and shared helpers.
-
-# Stable API base (evaluated at import time from env-backed settings)
-API_BASE = (settings.dashboard_api_base or "").rstrip("/")
 
 # HTTP defaults
 DEFAULT_TIMEOUT_S = float(settings.http_timeout_s)
@@ -212,6 +210,9 @@ def _normalize_path(path: str) -> str:
     # Reject full URLs to prevent SSRF/accidental overrides.
     if p.startswith("http://") or p.startswith("https://"):
         raise ValueError("path must be a relative API path, not a full URL")
+    # Reject protocol-relative
+    if p.startswith("//"):
+        raise ValueError("path must not start with //")
     return p if p.startswith("/") else f"/{p}"
 
 
@@ -222,6 +223,30 @@ def _normalize_method(method: str) -> str:
         # Fail closed: callers must use known HTTP verbs.
         raise ValueError(f"Unsupported HTTP method: {m}")
     return m
+
+
+def _settings_api_base() -> str:
+    """
+    Resolve API base at call-time (operator-friendly).
+    This avoids a stale module-level API_BASE if env changes between runs.
+    """
+    base = (settings.dashboard_api_base or "").strip().rstrip("/")
+    return base
+
+
+def _client_has_base_url(client: httpx.AsyncClient) -> bool:
+    """
+    httpx.AsyncClient can be constructed with base_url, making requests with relative paths.
+    """
+    try:
+        # base_url exists on httpx client; empty string is still "set" but not useful.
+        bu = getattr(client, "base_url", None)
+        if bu is None:
+            return False
+        # httpx.URL truthiness isn't consistent; check string form
+        return bool(str(bu))
+    except Exception:
+        return False
 
 
 async def api_request(
@@ -237,16 +262,13 @@ async def api_request(
     Low-level request helper used by all command modules.
     Returns: (status_code, response_text, json_dict_or_none)
 
-    Phase 5.2 hardening:
+    Phase 5.2/5.3 hardening:
     - clamped timeouts
     - normalized paths/methods
     - consistent headers (User-Agent)
     - user-safe error messages
+    - operator-friendly base_url behavior
     """
-    # Minimal sanity check: API_BASE must exist (settings.validate enforces this).
-    if not API_BASE:
-        return 500, "Bot misconfiguration: API base URL is missing.", None
-
     try:
         m = _normalize_method(method)
         p = _normalize_path(path)
@@ -254,10 +276,17 @@ async def api_request(
         logger.warning("api_request invalid input: method=%r path=%r err=%s", method, path, e)
         return 400, "Bot misconfiguration: invalid API request parameters.", None
 
-    url = f"{API_BASE}{p}"
-
     headers = {"User-Agent": DEFAULT_UA} if DEFAULT_UA else None
     t = _normalize_timeout(timeout)
+
+    # Prefer client.base_url if configured (recommended in bot.py)
+    if _client_has_base_url(client):
+        url = p.lstrip("/")  # httpx base_url + relative path
+    else:
+        base = _settings_api_base()
+        if not base:
+            return 500, "Bot misconfiguration: API base URL is missing.", None
+        url = f"{base}{p}"
 
     try:
         r = await client.request(m, url, params=params, json=json, timeout=t, headers=headers)
@@ -265,10 +294,10 @@ async def api_request(
         return 408, "Request timed out contacting API.", None
     except httpx.RequestError:
         # Avoid leaking internal exception text to volunteers; log it for operators.
-        logger.warning("Network error contacting API (%s %s)", m, url, exc_info=True)
+        logger.warning("Network error contacting API (%s %s)", m, str(url), exc_info=True)
         return 503, "Network error contacting API. Please try again in a moment.", None
     except Exception:
-        logger.exception("Unexpected error contacting API (%s %s)", m, url)
+        logger.exception("Unexpected error contacting API (%s %s)", m, str(url))
         return 500, "Unexpected error contacting API. Please try again.", None
 
     return r.status_code, r.text, _safe_json(r)
@@ -341,10 +370,6 @@ def role_name_for_request_type(request_type: str) -> Optional[str]:
 
 
 __all__ = [
-    # constants
-    "API_BASE",
-    "DEFAULT_TIMEOUT_S",
-    "DEFAULT_UA",
     # primitives
     "split_csv",
     "parse_iso_dt",

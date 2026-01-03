@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Optional, Set
 
-from sqlmodel import SQLModel, Field
+from sqlalchemy import event
+from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
-    # timezone-aware UTC for future-proofing
-    return datetime.now(timezone.utc)
+    # Keep timestamps UTC-naive for consistent storage/ordering in SQLite.
+    return datetime.utcnow().replace(tzinfo=None)
 
 
 class VolunteerStage(str, Enum):
@@ -87,8 +88,6 @@ class Person(SQLModel, table=True):
     # Canonical access booleans (API-stable)
     team_access: bool = Field(default=False, index=True)
     fundraising_access: bool = Field(default=False, index=True)
-
-    # Added for parity with approvals request types (team_access/fundraising_access/leader_access)
     leader_access: bool = Field(default=False, index=True)
 
     # If True, the user is an admin in the dashboard (NOT necessarily a Discord admin).
@@ -96,7 +95,6 @@ class Person(SQLModel, table=True):
     is_admin: bool = Field(default=False, index=True)
 
     # ---- Lifecycle stage ----
-    # Keep the DB column name "stage" for compatibility with existing data.
     stage: VolunteerStage = Field(default=VolunteerStage.OBSERVER, index=True)
 
     # If True, do NOT auto-promote this person anymore (human-approved only)
@@ -104,9 +102,7 @@ class Person(SQLModel, table=True):
 
     # Audit trail for stage changes
     stage_last_changed_at: datetime = Field(default_factory=utcnow, index=True)
-    stage_changed_reason: Optional[str] = Field(
-        default=None
-    )  # e.g. "auto:new->active", "approved:fundraising_access"
+    stage_changed_reason: Optional[str] = Field(default=None)
 
     # ---- Geographic placement ----
     region: Optional[str] = Field(default=None, index=True)
@@ -127,6 +123,7 @@ class Person(SQLModel, table=True):
     allow_leaderboard: bool = Field(default=True)
 
     created_at: datetime = Field(default_factory=utcnow, index=True)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)
 
     # -------------------------
     # Convenience helpers (safe to use in services)
@@ -172,3 +169,22 @@ class Person(SQLModel, table=True):
 
     def has_admin_access(self) -> bool:
         return bool(self.is_admin)
+
+
+# --- Auto-touch timestamps ---
+
+@event.listens_for(Person, "before_insert")
+def _person_before_insert(mapper, connection, target) -> None:  # noqa: ANN001
+    now = utcnow()
+    if not getattr(target, "created_at", None):
+        target.created_at = now
+    target.updated_at = now
+
+    # Ensure stage audit is initialized
+    if not getattr(target, "stage_last_changed_at", None):
+        target.stage_last_changed_at = now
+
+
+@event.listens_for(Person, "before_update")
+def _person_before_update(mapper, connection, target) -> None:  # noqa: ANN001
+    target.updated_at = utcnow()

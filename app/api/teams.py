@@ -17,12 +17,16 @@ router = APIRouter(prefix="/teams", tags=["power_teams"])
 # Schemas
 # -----------------------------
 
+
 class PowerTeamCreate(BaseModel):
     """
     Schema-based create so clients can't accidentally pass DB-only fields.
+
+    Note: current PowerTeam model requires leader_person_id and does NOT include `description`.
     """
-    name: str = PydField(..., min_length=1)
-    description: Optional[str] = None
+    leader_person_id: int = PydField(..., ge=1)
+    name: str = PydField(default="Power of 5", min_length=1, max_length=120)
+    min_goal_size: int = PydField(default=5, ge=1, le=500)
 
 
 class PowerTeamMemberCreate(BaseModel):
@@ -36,7 +40,6 @@ class PowerTeamMemberCreate(BaseModel):
     Note: we do NOT gate this by team_access here because:
       - some teams are onboarding/friendly
       - gating is handled by approvals + bot/Discord roles
-    If you want hard gating later, we can add an admin-only check.
     """
     power_team_id: Optional[int] = None
     person_id: Optional[int] = None
@@ -48,6 +51,7 @@ class PowerTeamMemberCreate(BaseModel):
 # -----------------------------
 # Helpers
 # -----------------------------
+
 
 def _find_person(session, *, person_id: Optional[int], discord_user_id: Optional[str]) -> Optional[Person]:
     if person_id is not None:
@@ -61,12 +65,18 @@ def _find_person(session, *, person_id: Optional[int], discord_user_id: Optional
 # Routes
 # -----------------------------
 
+
 @router.post("/", response_model=PowerTeam)
 def create_team(payload: PowerTeamCreate) -> PowerTeam:
     with get_session() as session:
+        leader = session.get(Person, payload.leader_person_id)
+        if not leader:
+            raise HTTPException(status_code=404, detail="Leader person not found")
+
         team = PowerTeam(
-            name=payload.name,
-            description=payload.description,
+            leader_person_id=payload.leader_person_id,
+            name=payload.name.strip() or "Power of 5",
+            min_goal_size=int(payload.min_goal_size),
         )
         session.add(team)
         session.commit()
@@ -75,9 +85,22 @@ def create_team(payload: PowerTeamCreate) -> PowerTeam:
 
 
 @router.get("/", response_model=List[PowerTeam])
-def list_teams() -> List[PowerTeam]:
+def list_teams(limit: int = 200, offset: int = 0) -> List[PowerTeam]:
+    limit = max(1, min(int(limit or 200), 500))
+    offset = max(0, int(offset or 0))
+
     with get_session() as session:
-        return list(session.exec(select(PowerTeam)).all())
+        q = select(PowerTeam).order_by(PowerTeam.created_at.desc()).offset(offset).limit(limit)
+        return list(session.exec(q).all())
+
+
+@router.get("/{team_id}", response_model=PowerTeam)
+def get_team(team_id: int) -> PowerTeam:
+    with get_session() as session:
+        team = session.get(PowerTeam, team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        return team
 
 
 @router.post("/{team_id}/members", response_model=PowerTeamMember)
@@ -133,11 +156,20 @@ def add_member(team_id: int, payload: PowerTeamMemberCreate) -> PowerTeamMember:
 
 
 @router.get("/{team_id}/members", response_model=List[PowerTeamMember])
-def list_members(team_id: int) -> List[PowerTeamMember]:
+def list_members(team_id: int, limit: int = 200, offset: int = 0) -> List[PowerTeamMember]:
+    limit = max(1, min(int(limit or 200), 500))
+    offset = max(0, int(offset or 0))
+
     with get_session() as session:
         team = session.get(PowerTeam, team_id)
         if not team:
             raise HTTPException(status_code=404, detail="Team not found")
 
-        q = select(PowerTeamMember).where(PowerTeamMember.power_team_id == team_id)
+        q = (
+            select(PowerTeamMember)
+            .where(PowerTeamMember.power_team_id == team_id)
+            .order_by(PowerTeamMember.joined_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         return list(session.exec(q).all())

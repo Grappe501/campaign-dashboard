@@ -50,8 +50,19 @@ class DashboardBot(discord.Client):
         # Debounce cache for wins automation: key -> unix timestamp (seconds)
         self._wins_recent_keys: Dict[str, float] = {}
 
+    def _sync_mode_label(self) -> str:
+        if settings.discord_sync_guild_only and settings.discord_guild_id:
+            return f"guild_only:{settings.discord_guild_id}"
+        return "global"
+
     async def setup_hook(self) -> None:
-        # Initialize API client once
+        """
+        Runs once during startup before on_ready.
+        Used for:
+        - creating the backend http client
+        - registering slash commands
+        - syncing commands (guild-only or global)
+        """
         if self.api is None:
             # Keep defaults conservative; dashboard API is internal and should be reliable.
             limits = httpx.Limits(max_connections=25, max_keepalive_connections=10)
@@ -62,7 +73,7 @@ class DashboardBot(discord.Client):
                 follow_redirects=True,
             )
 
-        # Register slash commands from modular command files
+        # Register slash commands from modular command files (may raise if required modules fail)
         register_all(self, self.tree)
 
         # Sync commands (guild-only optional for fast iteration)
@@ -72,12 +83,13 @@ class DashboardBot(discord.Client):
                 guild = discord.Object(id=guild_id)
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
-                logger.info("Slash commands synced to guild=%s", guild_id)
+                logger.info("Slash commands synced (mode=guild_only guild_id=%s)", guild_id)
             else:
                 await self.tree.sync()
-                logger.info("Slash commands synced globally")
+                logger.info("Slash commands synced (mode=global)")
         except Exception:
-            logger.exception("Slash command sync failed")
+            # Sync errors should be visible to operators but should not crash startup.
+            logger.exception("Slash command sync failed (mode=%s)", self._sync_mode_label())
 
     async def close(self) -> None:
         # Close backend http client first
@@ -85,19 +97,29 @@ class DashboardBot(discord.Client):
             try:
                 await self.api.aclose()
             except Exception:
-                pass
+                logger.exception("Error closing backend http client (ignored).")
             self.api = None
         await super().close()
 
     async def on_ready(self) -> None:
+        # Safe operator snapshot (no secrets) if available
+        redacted = None
+        if hasattr(settings, "redacted_dict"):
+            try:
+                redacted = settings.redacted_dict()
+            except Exception:
+                redacted = None
+
         logger.info(
-            "DashboardBot ready as %s (guild_sync=%s, wins=%s, role_sync=%s, api=%s)",
+            "DashboardBot ready as %s (sync=%s wins=%s role_sync=%s api_base=%s)",
             str(self.user),
-            str(settings.discord_guild_id or "global"),
+            self._sync_mode_label(),
             "ON" if settings.enable_wins_automation else "OFF",
             "ON" if settings.enable_role_sync else "OFF",
             settings.dashboard_api_base.rstrip("/"),
         )
+        if redacted:
+            logger.info("Bot settings (redacted): %s", redacted)
 
     def _wins_cache_prune(self, now_ts: float) -> None:
         """
@@ -136,9 +158,13 @@ class DashboardBot(discord.Client):
             return
 
         try:
-            if message.author.bot or not message.guild:
+            # Ignore bots, DMs, and non-guild contexts
+            if message.author.bot:
+                return
+            if not message.guild:
                 return
 
+            # Optional channel scoping
             if settings.wins_require_channel:
                 if not isinstance(message.channel, discord.TextChannel):
                     return

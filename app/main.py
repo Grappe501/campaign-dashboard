@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .database import init_db
+from .database import db_runtime_snapshot, engine, init_db
 
 # Existing routers
 from .api.people import router as people_router
@@ -25,8 +24,38 @@ from .api.impact import router as impact_router
 from .api.bootstrap import router as bootstrap_router
 from .api.approvals import router as approvals_router
 
-# Optional Discord router (if present later)
-# from .api.discord import router as discord_router
+logger = logging.getLogger(__name__)
+
+
+def _safe_settings_snapshot() -> Dict[str, Any]:
+    """
+    Non-secret runtime snapshot for operators.
+    Keep this stable and safe (no tokens, no keys).
+    """
+    return {
+        "env": getattr(settings, "env", "local"),
+        "app_version": getattr(settings, "app_version", "0.3.x"),
+        "host": getattr(settings, "host", "127.0.0.1"),
+        "port": int(getattr(settings, "port", 8000)),
+        "reload": bool(getattr(settings, "reload", False)),
+        "cors_allow_origins": getattr(settings, "cors_allow_origins", ["*"]),
+        "public_api_base": getattr(settings, "public_api_base", ""),
+    }
+
+
+def _db_ok() -> bool:
+    """
+    Lightweight DB connectivity check for readiness.
+
+    IMPORTANT: uses the shared process engine (no accidental new engine creation).
+    """
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        return True
+    except Exception:
+        logger.exception("DB health check failed")
+        return False
 
 
 def create_app() -> FastAPI:
@@ -51,24 +80,39 @@ def create_app() -> FastAPI:
     def _startup() -> None:
         # Creates tables for all registered SQLModel models (idempotent for SQLite)
         init_db()
+        logger.info("API startup complete (version=%s)", getattr(settings, "app_version", "0.3.x"))
 
     # --- Friendly error envelope (API callers + bot) ---
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(request, exc):  # noqa: ANN001
-        # Keep FastAPI semantics but provide a consistent JSON structure
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        detail: Any
         try:
             detail = exc.detail
         except Exception:
             detail = "HTTP error"
         return JSONResponse(status_code=getattr(exc, "status_code", 500), content={"detail": detail})
 
-    # --- Health / meta ---
+    # --- Health / readiness / meta ---
     @app.get("/health", tags=["meta"])
     def health() -> Dict[str, Any]:
         return {
             "ok": True,
-            "env": getattr(settings, "env", "local"),
-            "api_base": os.getenv("PUBLIC_API_BASE", ""),
+            "db_ok": _db_ok(),
+            **_safe_settings_snapshot(),
+            **db_runtime_snapshot(),
+        }
+
+    @app.get("/ready", tags=["meta"])
+    def ready() -> Dict[str, Any]:
+        if not _db_ok():
+            raise HTTPException(status_code=503, detail="Database not ready")
+        return {"ready": True}
+
+    @app.get("/meta", tags=["meta"])
+    def meta() -> Dict[str, Any]:
+        return {
+            **_safe_settings_snapshot(),
+            **db_runtime_snapshot(),
         }
 
     @app.get("/version", tags=["meta"])
@@ -89,9 +133,6 @@ def create_app() -> FastAPI:
     app.include_router(bootstrap_router)
     app.include_router(approvals_router)
 
-    # Future milestones (uncomment when the modules exist)
-    # app.include_router(discord_router)
-
     return app
 
 
@@ -102,8 +143,6 @@ def run() -> None:
     logging.basicConfig(level=getattr(logging, str(settings.log_level).upper(), logging.INFO))
     import uvicorn
 
-    # NOTE: init_db is handled by the FastAPI startup hook.
-    # reload should be True in local dev, False in prod.
     uvicorn.run(
         "app.main:app",
         host=getattr(settings, "host", "127.0.0.1"),

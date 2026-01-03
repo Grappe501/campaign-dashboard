@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, List, Literal
+from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr, Field as PydField
@@ -8,7 +8,6 @@ from sqlmodel import select
 
 from ..database import get_session
 from ..models.person import Person, VolunteerStage, utcnow
-from ..services.impact_engine import compute_impact
 from ..services.stage_engine import apply_stage_change
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -68,13 +67,7 @@ class PersonPatch(BaseModel):
     allow_discord_comms: Optional[bool] = None
     allow_leaderboard: Optional[bool] = None
 
-    # Backward-compatible access setters (optional; admin use only).
-    # Accept both styles:
-    #   team / fundraising / leader (legacy shorthand)
-    #   team_access / fundraising_access / leader_access (canonical)
-    #
-    # If present, these do NOT change stage; they only flip boolean access flags.
-    # This is gated behind stage_locked / admin paths in the handler.
+    # Canonical access setters (optional; admin paths only).
     team_access: Optional[bool] = None
     fundraising_access: Optional[bool] = None
     leader_access: Optional[bool] = None
@@ -201,10 +194,6 @@ def _ensure_not_gated(stage: VolunteerStage) -> None:
 
 
 def _ensure_stage_unlocked_for_manual_change(p: Person) -> None:
-    """
-    If approvals has locked the stage, normal /people updates must not change it.
-    (Approvals workflows own locking/unlocking.)
-    """
     if bool(getattr(p, "stage_locked", False)):
         raise HTTPException(
             status_code=403,
@@ -213,25 +202,15 @@ def _ensure_stage_unlocked_for_manual_change(p: Person) -> None:
 
 
 def _normalize_stage(stage: Optional[VolunteerStage]) -> VolunteerStage:
-    """
-    Defensive helper so we always work with a real enum member.
-    """
     return stage or VolunteerStage.OBSERVER
 
 
 def _ensure_tracking_number(seed: str) -> str:
-    """
-    Lightweight TN for discord-first creation.
-    Example: TN-20251229-123456 (suffix = last 6 chars of discord id)
-    """
     suffix = (seed or "000000")[-6:]
     return f"TN-{utcnow().strftime('%Y%m%d')}-{suffix}"
 
 
 def _person_to_dict(p: Person) -> Dict[str, Any]:
-    """
-    Always return canonical *_access booleans, while remaining compatible with older clients.
-    """
     try:
         d: Dict[str, Any] = p.model_dump()
     except Exception:
@@ -254,7 +233,7 @@ def _person_to_dict(p: Person) -> Dict[str, Any]:
     d["leader_access"] = bool(getattr(p, "leader_access", False))
     d["is_admin"] = bool(getattr(p, "is_admin", False))
 
-    # Legacy mirrors for clients that still read old keys (keep them in response; they equal canonical)
+    # Legacy mirrors
     d["team"] = d["team_access"]
     d["fundraising"] = d["fundraising_access"]
     d["leader"] = d["leader_access"]
@@ -263,13 +242,8 @@ def _person_to_dict(p: Person) -> Dict[str, Any]:
 
 
 def _next_steps_for_person(p: Person) -> List[str]:
-    """
-    Onboarding "doesn't go anywhere" fix:
-    give concrete next actions based on stage + access flags.
-    """
     steps: List[str] = []
 
-    # baseline: first action + community
     if p.stage in (VolunteerStage.OBSERVER, VolunteerStage.NEW):
         steps.append("Do one small action today (call/text/door/share) and log it as a win.")
         steps.append("Post an intro: your county + 1 way you can help this week.")
@@ -281,7 +255,6 @@ def _next_steps_for_person(p: Person) -> List[str]:
     if p.stage == VolunteerStage.OWNER:
         steps.append("Pick a lane for this week and bring 1 new person into the hub.")
 
-    # gated capabilities (app-side permissions; Discord can mirror)
     if getattr(p, "team_access", False) and p.stage in (
         VolunteerStage.TEAM,
         VolunteerStage.LEADER,
@@ -312,28 +285,24 @@ def _apply_access_updates(
     fundraising_access: Optional[bool] = None,
     leader_access: Optional[bool] = None,
 ) -> bool:
-    """
-    Apply canonical access updates if the model supports them.
-    Returns True if any value changed.
-    """
     changed = False
 
     if team_access is not None and hasattr(p, "team_access"):
-        new_val = bool(team_access)
-        if bool(getattr(p, "team_access", False)) != new_val:
-            p.team_access = new_val
+        nv = bool(team_access)
+        if bool(getattr(p, "team_access", False)) != nv:
+            p.team_access = nv
             changed = True
 
     if fundraising_access is not None and hasattr(p, "fundraising_access"):
-        new_val = bool(fundraising_access)
-        if bool(getattr(p, "fundraising_access", False)) != new_val:
-            p.fundraising_access = new_val
+        nv = bool(fundraising_access)
+        if bool(getattr(p, "fundraising_access", False)) != nv:
+            p.fundraising_access = nv
             changed = True
 
     if leader_access is not None and hasattr(p, "leader_access"):
-        new_val = bool(leader_access)
-        if bool(getattr(p, "leader_access", False)) != new_val:
-            p.leader_access = new_val
+        nv = bool(leader_access)
+        if bool(getattr(p, "leader_access", False)) != nv:
+            p.leader_access = nv
             changed = True
 
     return changed
@@ -345,13 +314,6 @@ def _apply_access_updates(
 
 @router.post("/", response_model=Person)
 def create_person(payload: PersonCreate) -> Person:
-    """
-    Create a person.
-
-    Guardrails:
-    - Prevent creating directly into gated stages (TEAM/FUNDRAISING/LEADER/ADMIN).
-    - Initialize stage audit fields.
-    """
     stage = _normalize_stage(payload.stage)
     _ensure_not_gated(stage)
 
@@ -362,7 +324,6 @@ def create_person(payload: PersonCreate) -> Person:
         phone=payload.phone,
         discord_user_id=payload.discord_user_id,
         stage=stage,
-        # approvals-owned fields (safe defaults)
         stage_locked=False,
         stage_last_changed_at=utcnow(),
         stage_changed_reason="manual:create",
@@ -377,9 +338,7 @@ def create_person(payload: PersonCreate) -> Person:
     )
 
     with get_session() as session:
-        existing = session.exec(
-            select(Person).where(Person.tracking_number == person.tracking_number)
-        ).first()
+        existing = session.exec(select(Person).where(Person.tracking_number == person.tracking_number)).first()
         if existing:
             raise HTTPException(status_code=409, detail="tracking_number already exists")
 
@@ -391,12 +350,6 @@ def create_person(payload: PersonCreate) -> Person:
 
 @router.post("/discord/upsert", response_model=Person)
 def upsert_from_discord(payload: DiscordUpsert) -> Person:
-    """
-    Discord-first: create or update a person by discord_user_id.
-
-    This is the foundation of onboarding, because Discord users
-    should not have to know a person_id or tracking_number.
-    """
     with get_session() as session:
         p = session.exec(select(Person).where(Person.discord_user_id == payload.discord_user_id)).first()
 
@@ -418,7 +371,6 @@ def upsert_from_discord(payload: DiscordUpsert) -> Person:
                 recruited_by_person_id=payload.recruited_by_person_id,
             )
         else:
-            # Update basics (do not alter stage here)
             if payload.name:
                 p.name = payload.name
             if payload.email is not None:
@@ -438,7 +390,6 @@ def upsert_from_discord(payload: DiscordUpsert) -> Person:
             if payload.recruited_by_person_id is not None:
                 p.recruited_by_person_id = payload.recruited_by_person_id
 
-        # Discord sync hardening: capture "last seen" context if model supports it
         try:
             p.note_discord_seen(
                 guild_id=payload.guild_id,
@@ -456,19 +407,6 @@ def upsert_from_discord(payload: DiscordUpsert) -> Person:
 
 @router.post("/onboard", response_model=OnboardResponse)
 def onboard(payload: OnboardRequest) -> OnboardResponse:
-    """
-    Mark a person as onboarded and return next-step guidance.
-
-    Accepts either:
-    - person_id
-    - discord_user_id (Discord-first)
-
-    Behavior:
-    - sets onboarded_at if missing
-    - optionally updates email/phone/county/city/consent flags
-    - if stage is OBSERVER, promotes to NEW (safe) unless stage_locked
-    - records "last seen" discord context when provided
-    """
     with get_session() as session:
         p: Optional[Person] = None
         if payload.person_id is not None:
@@ -479,7 +417,6 @@ def onboard(payload: OnboardRequest) -> OnboardResponse:
         if not p:
             raise HTTPException(status_code=404, detail="Person not found")
 
-        # enrichment
         if payload.email is not None:
             p.email = str(payload.email) if payload.email else None
         if payload.phone is not None:
@@ -494,13 +431,11 @@ def onboard(payload: OnboardRequest) -> OnboardResponse:
         if payload.allow_tracking is not None:
             p.allow_tracking = payload.allow_tracking
 
-        # mark onboarded
         try:
             p.mark_onboarded()
         except Exception:
             pass
 
-        # record discord "last seen" (optional)
         try:
             p.note_discord_seen(
                 guild_id=payload.guild_id,
@@ -510,7 +445,6 @@ def onboard(payload: OnboardRequest) -> OnboardResponse:
         except Exception:
             pass
 
-        # If they're still OBSERVER and not locked, move to NEW (safe)
         if p.stage == VolunteerStage.OBSERVER and not bool(getattr(p, "stage_locked", False)):
             apply_stage_change(
                 session=session,
@@ -519,7 +453,6 @@ def onboard(payload: OnboardRequest) -> OnboardResponse:
                 reason="onboard:observer->new",
                 lock_stage=False,
             )
-            # apply_stage_change already committed/refreshed
             return OnboardResponse(person=_person_to_dict(p), next_steps=_next_steps_for_person(p))
 
         session.add(p)
@@ -536,13 +469,6 @@ def list_people(
     county: Optional[str] = None,
     discord_user_id: Optional[str] = None,
 ) -> List[Person]:
-    """
-    List people with basic filtering + pagination.
-
-    IMPORTANT:
-    - We sort by id desc (NOT created_at) to avoid schema-mismatch 500s if your
-      SQLite people table was created before created_at existed.
-    """
     if limit < 1:
         limit = 1
     if limit > 1000:
@@ -552,7 +478,6 @@ def list_people(
 
     with get_session() as session:
         q = select(Person)
-
         if stage is not None:
             q = q.where(Person.stage == stage)
         if county:
@@ -564,6 +489,16 @@ def list_people(
         return list(session.exec(q).all())
 
 
+# IMPORTANT: put static routes BEFORE /{person_id} to avoid 422 from int casting
+@router.get("/by_tracking/{tracking_number}", response_model=Person)
+def get_person_by_tracking(tracking_number: str) -> Person:
+    with get_session() as session:
+        p = session.exec(select(Person).where(Person.tracking_number == tracking_number)).first()
+        if not p:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return p
+
+
 @router.get("/{person_id}", response_model=Person)
 def get_person(person_id: int) -> Person:
     with get_session() as session:
@@ -573,29 +508,8 @@ def get_person(person_id: int) -> Person:
         return p
 
 
-@router.get("/by_tracking/{tracking_number}", response_model=Person)
-def get_person_by_tracking(tracking_number: str) -> Person:
-    """
-    Convenience endpoint (future-proofing): fetch by tracking_number.
-    """
-    with get_session() as session:
-        p = session.exec(select(Person).where(Person.tracking_number == tracking_number)).first()
-        if not p:
-            raise HTTPException(status_code=404, detail="Person not found")
-        return p
-
-
 @router.patch("/{person_id}", response_model=Person)
 def patch_person(person_id: int, payload: PersonPatch) -> Person:
-    """
-    Partial update.
-
-    Guardrails:
-    - Cannot set gated stages via this endpoint.
-    - Cannot change stage if stage_locked=True.
-    - Stage transitions (safe) go through apply_stage_change for audit consistency.
-    - Access flag updates accept both legacy and canonical keys, but never change stage.
-    """
     with get_session() as session:
         p = session.get(Person, person_id)
         if not p:
@@ -613,11 +527,10 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
                 lock_stage=False,
             )
 
-        # Scalar updates (only if provided)
         if payload.name is not None:
             p.name = payload.name
         if payload.email is not None:
-            p.email = str(payload.email)
+            p.email = str(payload.email) if payload.email else None
         if payload.phone is not None:
             p.phone = payload.phone
         if payload.discord_user_id is not None:
@@ -643,9 +556,6 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
             p.allow_leaderboard = payload.allow_leaderboard
 
         # Access updates (canonical + legacy aliases)
-        # We treat these as admin-only controls:
-        # - If stage is locked, only allow if caller is in an admin workflow (not represented here),
-        #   so we conservatively block when locked.
         if bool(getattr(p, "stage_locked", False)) and (
             payload.team_access is not None
             or payload.fundraising_access is not None
@@ -657,9 +567,7 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
             raise HTTPException(status_code=403, detail="Access flags are managed by approvals while stage is locked.")
 
         team_access = payload.team_access if payload.team_access is not None else payload.team
-        fundraising_access = (
-            payload.fundraising_access if payload.fundraising_access is not None else payload.fundraising
-        )
+        fundraising_access = payload.fundraising_access if payload.fundraising_access is not None else payload.fundraising
         leader_access = payload.leader_access if payload.leader_access is not None else payload.leader
 
         _apply_access_updates(
@@ -677,16 +585,6 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
 
 @router.put("/{person_id}", response_model=Person)
 def replace_person(person_id: int, payload: PersonReplace) -> Person:
-    """
-    Full replace (legacy compatibility), but schema-based to prevent bypass.
-
-    Rules:
-    - tracking_number is immutable (must match existing).
-    - stage cannot be set to gated stages here.
-    - cannot change stage if stage_locked=True.
-    - stage transitions (safe) go through apply_stage_change for audit consistency.
-    - access flags accept both legacy and canonical keys; if provided they are applied.
-    """
     with get_session() as session:
         p = session.get(Person, person_id)
         if not p:
@@ -706,7 +604,6 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
                 lock_stage=False,
             )
 
-        # Overwrite allowed fields (PUT semantics)
         p.name = payload.name
         p.email = str(payload.email) if payload.email else None
         p.phone = payload.phone
@@ -722,7 +619,6 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
         p.allow_discord_comms = payload.allow_discord_comms
         p.allow_leaderboard = payload.allow_leaderboard
 
-        # Access updates (canonical + legacy aliases)
         if bool(getattr(p, "stage_locked", False)) and (
             payload.team_access is not None
             or payload.fundraising_access is not None
@@ -734,9 +630,7 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
             raise HTTPException(status_code=403, detail="Access flags are managed by approvals while stage is locked.")
 
         team_access = payload.team_access if payload.team_access is not None else payload.team
-        fundraising_access = (
-            payload.fundraising_access if payload.fundraising_access is not None else payload.fundraising
-        )
+        fundraising_access = payload.fundraising_access if payload.fundraising_access is not None else payload.fundraising
         leader_access = payload.leader_access if payload.leader_access is not None else payload.leader
 
         _apply_access_updates(
@@ -758,5 +652,13 @@ def get_person_impact(person_id: int) -> Dict[str, Any]:
         p = session.get(Person, person_id)
         if not p:
             raise HTTPException(status_code=404, detail="Person not found")
+
+        # Import lazily so missing/renamed module doesn't crash API startup.
+        try:
+            from ..services.impact_engine import compute_impact  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=501, detail="Impact engine not available in this build")
+
         summary = compute_impact(session, person_id)
-        return summary.__dict__
+        # summary may be a dataclass; normalize to dict
+        return summary.__dict__ if hasattr(summary, "__dict__") else {"summary": summary}

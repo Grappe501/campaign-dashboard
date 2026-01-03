@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Generator, List
+from typing import Generator, List, Optional
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
@@ -12,11 +12,11 @@ from .config import settings
 
 
 def _is_sqlite(database_url: str) -> bool:
-    return database_url.startswith("sqlite")
+    return (database_url or "").startswith("sqlite")
 
 
 def _is_postgres(database_url: str) -> bool:
-    return database_url.startswith("postgresql")
+    return (database_url or "").startswith("postgresql")
 
 
 def _ensure_sqlite_dir(database_url: str) -> None:
@@ -25,7 +25,7 @@ def _ensure_sqlite_dir(database_url: str) -> None:
       sqlite:///./data/campaign.sqlite
       sqlite:////absolute/path/to/db.sqlite
     """
-    if not database_url.startswith("sqlite:///"):
+    if not (database_url or "").startswith("sqlite:///"):
         return
 
     path = database_url.replace("sqlite:///", "", 1)
@@ -38,6 +38,9 @@ def _sqlite_pragmas(engine: Engine) -> None:
     """
     Pragmas that make SQLite usable for multi-request local dev and larger datasets.
     Safe defaults that won't corrupt data.
+
+    NOTE: This function attaches a SQLAlchemy 'connect' event listener to the engine.
+    It must be called exactly once per engine instance.
     """
 
     @event.listens_for(engine, "connect")
@@ -71,15 +74,29 @@ def _postgres_session_settings(engine: Engine) -> None:
             pass
 
 
+# ---------------------------------------------------------------------
+# Engine lifecycle (single shared engine per process)
+# ---------------------------------------------------------------------
+
+_ENGINE: Optional[Engine] = None
+
+
 def get_engine() -> Engine:
     """
-    Create and return the SQLAlchemy engine.
+    Return the single shared SQLAlchemy engine for this process.
 
-    - Uses settings.resolved_database_url:
-        DATABASE_URL (preferred) OR fallback DB_PATH
-    - SQLite gets pragmas + check_same_thread=False for FastAPI
-    - Postgres works by just changing DATABASE_URL later
+    Operator Readiness:
+    - This must NOT create a new engine each call.
+    - Health checks should use this shared engine so pragmas/pools are consistent.
+
+    Uses settings.resolved_database_url:
+      DATABASE_URL (preferred) OR fallback DB_PATH
     """
+    global _ENGINE
+
+    if _ENGINE is not None:
+        return _ENGINE
+
     database_url = settings.resolved_database_url
 
     if _is_sqlite(database_url):
@@ -102,12 +119,27 @@ def get_engine() -> Engine:
     if _is_postgres(database_url):
         _postgres_session_settings(engine)
 
-    return engine
+    _ENGINE = engine
+    return _ENGINE
 
 
-# Single, shared engine for the app process
+# Public shared engine (backwards compatible import sites)
 engine: Engine = get_engine()
 
+
+def db_runtime_snapshot() -> dict:
+    """
+    Non-secret snapshot useful for operators and /meta style endpoints.
+    """
+    return {
+        "resolved_database_url": getattr(settings, "resolved_database_url", ""),
+        "sqlite_auto_migrate": bool(getattr(settings, "sqlite_auto_migrate", False)),
+    }
+
+
+# ---------------------------------------------------------------------
+# Model registry
+# ---------------------------------------------------------------------
 
 def register_models() -> None:
     """
@@ -122,7 +154,7 @@ def register_models() -> None:
     from .models.voter import VoterContact  # noqa: F401
     from .models.event import Event  # noqa: F401
 
-    # County context (current)
+    # County context
     from .models.county import County  # noqa: F401
     from .models.county_snapshot import CountySnapshot  # noqa: F401
     from .models.alice_county import AliceCounty  # noqa: F401
@@ -139,15 +171,10 @@ def register_models() -> None:
     # Approvals (Milestone 3 gating)
     from .models.approval_request import ApprovalRequest  # noqa: F401
 
-    # Next milestone (uncomment when added)
-    # from .models.bls_area_series import BLSAreaSeries  # noqa: F401
-    # from .models.invite import Invite, InviteVerification  # noqa: F401
-    # from .models.api_cache import APICache  # noqa: F401
 
-    # Voter-file scale (future)
-    # from .models.state_voter import StateVoter  # noqa: F401
-    # from .models.voter_history import VoterHistory  # noqa: F401
-
+# ---------------------------------------------------------------------
+# SQLite micro-migrations (ADD COLUMN only)
+# ---------------------------------------------------------------------
 
 def _sqlite_table_exists(session: Session, table: str) -> bool:
     row = session.exec(
@@ -232,7 +259,7 @@ def _sqlite_auto_migrate() -> None:
     - optional backfills (no drops/renames)
     - gated behind settings.sqlite_auto_migrate
     """
-    if not settings.sqlite_auto_migrate:
+    if not getattr(settings, "sqlite_auto_migrate", False):
         return
 
     database_url = settings.resolved_database_url
@@ -240,7 +267,28 @@ def _sqlite_auto_migrate() -> None:
         return
 
     with Session(engine) as session:
-        # Person table: new canonical access flag added in Milestone 3+
+        # ---- people ----
+        # New timestamp column (from Person model hardening)
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="updated_at",
+            ddl="updated_at DATETIME",
+        )
+
+        # Canonical access booleans (if DB was created before these fields existed)
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="team_access",
+            ddl="team_access BOOLEAN DEFAULT 0",
+        )
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="fundraising_access",
+            ddl="fundraising_access BOOLEAN DEFAULT 0",
+        )
         _sqlite_add_column_if_missing(
             session,
             table="people",
@@ -248,8 +296,28 @@ def _sqlite_auto_migrate() -> None:
             ddl="leader_access BOOLEAN DEFAULT 0",
         )
 
-        # PowerTeamMember: standardize member FK to person_id
-        # If table doesn't exist yet, these are harmless no-ops.
+        # Discord last-seen fields (forward compatible; harmless if already present)
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="last_seen_discord_guild_id",
+            ddl="last_seen_discord_guild_id TEXT",
+        )
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="last_seen_discord_channel_id",
+            ddl="last_seen_discord_channel_id TEXT",
+        )
+        _sqlite_add_column_if_missing(
+            session,
+            table="people",
+            column="last_seen_discord_username",
+            ddl="last_seen_discord_username TEXT",
+        )
+
+        # ---- power_team_members ----
+        # Standardize member FK to person_id (backfill from prior column if it exists)
         _sqlite_add_column_if_missing(
             session,
             table="power_team_members",
@@ -263,6 +331,27 @@ def _sqlite_auto_migrate() -> None:
             src_col="member_person_id",
         )
 
+        # ---- power5_invites ----
+        _sqlite_add_column_if_missing(
+            session,
+            table="power5_invites",
+            column="invitee_person_id",
+            ddl="invitee_person_id INTEGER",
+        )
+
+        # ---- voter_contacts ----
+        # If older DB lacked updated_at
+        _sqlite_add_column_if_missing(
+            session,
+            table="voter_contacts",
+            column="updated_at",
+            ddl="updated_at DATETIME",
+        )
+
+
+# ---------------------------------------------------------------------
+# Public init + session helpers
+# ---------------------------------------------------------------------
 
 def init_db(create_tables: bool = True) -> None:
     """

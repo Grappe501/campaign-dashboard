@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Dict
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,8 +14,9 @@ def _split_origins(raw: Any) -> List[str]:
 
     Supports:
       - list[str] (already parsed)
-      - "*" or "['*']"
+      - "*" or "['*']" or '["*"]'
       - comma-separated string: "https://a.com, https://b.com"
+      - JSON list string: '["https://a.com","https://b.com"]'
     """
     if raw is None:
         return ["*"]
@@ -28,9 +30,21 @@ def _split_origins(raw: Any) -> List[str]:
     if not s:
         return ["*"]
 
-    # Common "single star" case
+    # Common single star case
     if s == "*":
         return ["*"]
+
+    # Try JSON list
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                items = [str(x).strip() for x in parsed]
+                items = [x for x in items if x]
+                return items or ["*"]
+        except Exception:
+            # fall through
+            pass
 
     # Comma-separated origins
     if "," in s:
@@ -39,6 +53,14 @@ def _split_origins(raw: Any) -> List[str]:
         return parts or ["*"]
 
     return [s]
+
+
+def _redact(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 6:
+        return "***"
+    return value[:2] + "***" + value[-2:]
 
 
 class Settings(BaseSettings):
@@ -50,6 +72,10 @@ class Settings(BaseSettings):
     - Normalize user-provided values (CORS, log level, DB URL)
     - Provide a single resolved DB URL source of truth
     - Remain permissive for local dev, safe for hosted use
+
+    Operator Readiness (Phase 5.3):
+    - Provide safe, non-secret snapshots for diagnostics
+    - Keep resolution rules explicit and inspectable
     """
 
     model_config = SettingsConfigDict(
@@ -62,7 +88,6 @@ class Settings(BaseSettings):
     # App identity
     env: str = Field(default="local", alias="APP_ENV")
     app_name: str = Field(default="campaign-dashboard", alias="APP_NAME")
-    # Default to current package zip version you referenced
     app_version: str = Field(default="0.4.0", alias="APP_VERSION")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
@@ -81,11 +106,9 @@ class Settings(BaseSettings):
     db_path: str = Field(default="./data/campaign.sqlite", alias="DB_PATH")
 
     # SQLite schema safety (local dev)
-    # If True and using SQLite, we will attempt non-destructive ALTER TABLEs
-    # for missing columns during init_db(). Keep False in production DBs.
     sqlite_auto_migrate: bool = Field(default=True, alias="SQLITE_AUTO_MIGRATE")
 
-    # Secrets / keys
+    # Secrets / keys (kept here for convenience; never log raw values)
     discord_bot_token: str = Field(default="", alias="DISCORD_BOT_TOKEN")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     census_api_key: str = Field(default="", alias="CENSUS_API_KEY")
@@ -155,9 +178,7 @@ class Settings(BaseSettings):
         if self.database_url:
             return self.database_url
 
-        path = (self.db_path or "").strip()
-        if not path:
-            path = "./data/campaign.sqlite"
+        path = (self.db_path or "").strip() or "./data/campaign.sqlite"
 
         # If already a URL, accept it
         if path.startswith("sqlite:"):
@@ -168,13 +189,52 @@ class Settings(BaseSettings):
 
         # If relative, anchor to cwd with ./ prefix for sqlite URL consistency
         if not p.is_absolute():
-            # preserve user intent if they already used "./"
+            # Preserve user intent if they already used "./"
             if str(p).startswith("./"):
                 return f"sqlite:///{p.as_posix()}"
             return f"sqlite:///./{p.as_posix()}"
 
         # Absolute path needs 4 slashes after scheme (sqlite:////abs/path)
         return f"sqlite:////{p.as_posix().lstrip('/')}"
+
+    # -------------------------
+    # Operator helpers
+    # -------------------------
+
+    def redacted_dict(self) -> Dict[str, Any]:
+        """
+        Safe snapshot for logs/diagnostics. Never includes raw secrets.
+        """
+        return {
+            "env": self.env,
+            "app_name": self.app_name,
+            "app_version": self.app_version,
+            "log_level": self.log_level,
+            "host": self.host,
+            "port": self.port,
+            "reload": self.reload,
+            "cors_allow_origins": self.cors_allow_origins,
+            "database_url": self.database_url,
+            "db_path": self.db_path,
+            "resolved_database_url": self.resolved_database_url,
+            "sqlite_auto_migrate": self.sqlite_auto_migrate,
+            "public_api_base": self.public_api_base,
+            "discord_bot_token": _redact(self.discord_bot_token),
+            "openai_api_key": _redact(self.openai_api_key),
+            "census_api_key": _redact(self.census_api_key),
+            "bls_api_key": _redact(self.bls_api_key),
+        }
+
+    def validate_runtime(self) -> None:
+        """
+        Optional runtime validation for operators.
+
+        We keep the backend permissive for local dev, but still want a place
+        to assert basic invariants (e.g., DB URL not empty).
+        """
+        if not self.resolved_database_url:
+            raise RuntimeError("Resolved DATABASE_URL is empty. Check DATABASE_URL or DB_PATH.")
+        # host/port are already normalized; avoid over-validating for local workflows.
 
 
 settings = Settings()

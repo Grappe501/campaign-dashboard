@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Optional, Any, Dict, Literal, List, cast, Tuple
 
 from fastapi import APIRouter, HTTPException
@@ -63,6 +64,32 @@ class ApprovalReviewResponse(BaseModel):
 
 class ApprovalListResponse(BaseModel):
     items: List[Dict[str, Any]]
+
+
+class RoleSyncRequest(BaseModel):
+    """
+    Bot/operator role-sync request.
+
+    We do NOT mutate anything here. We only compute desired roles for Discord to apply.
+    """
+    person_id: Optional[int] = None
+    discord_user_id: Optional[str] = None
+
+    # Optional: provided for auditing/forward-compat (not required)
+    guild_id: Optional[str] = None
+
+
+class RoleSyncResponse(BaseModel):
+    """
+    Response used by /sync_me.
+    - desired_roles: authoritative set to enforce
+    - added_roles: roles that should be ensured present (same as desired_roles)
+    - removed_roles: roles from managed set that should be removed if present
+    """
+    person_id: int
+    desired_roles: List[str]
+    added_roles: List[str]
+    removed_roles: List[str]
 
 
 # -------------------------
@@ -240,6 +267,62 @@ def _to_dict(req: ApprovalRequest) -> Dict[str, Any]:
 
 def _bad_request_type_message() -> str:
     return "request_type must be team|fundraising|leader (or *_access variants)."
+
+
+def _env_role(name: str, default: str) -> str:
+    return (os.getenv(name, default) or default).strip() or default
+
+
+def _managed_role_names() -> Dict[str, str]:
+    """
+    Role names managed by the system. These must match your Discord server roles.
+    Uses same env names as bot for consistency.
+    """
+    return {
+        "team": _env_role("DASHBOARD_ROLE_TEAM", "Team"),
+        "fundraising": _env_role("DASHBOARD_ROLE_FUNDRAISING", "Fundraising"),
+        "leader": _env_role("DASHBOARD_ROLE_LEADER", "Leader"),
+        # Optional; only used if you actually maintain an Admin role in Discord
+        "admin": _env_role("DASHBOARD_ROLE_ADMIN", "Admin"),
+    }
+
+
+def _desired_roles_for_person(p: Person) -> List[str]:
+    """
+    Compute desired Discord roles from Person access flags.
+    Idempotent: same input => same output.
+    """
+    roles = _managed_role_names()
+    desired: List[str] = []
+
+    # Access flags are part of the canonical Person model in v0.4.0
+    if bool(getattr(p, "team_access", False)):
+        desired.append(roles["team"])
+    if bool(getattr(p, "fundraising_access", False)):
+        desired.append(roles["fundraising"])
+    if bool(getattr(p, "leader_access", False)):
+        desired.append(roles["leader"])
+    if bool(getattr(p, "is_admin", False)):
+        desired.append(roles["admin"])
+
+    # Deduplicate, preserve order
+    seen: set[str] = set()
+    out: List[str] = []
+    for r in desired:
+        if r and r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def _removed_roles_for_person(p: Person) -> List[str]:
+    """
+    Roles in the managed set that should be removed if present.
+    """
+    roles = _managed_role_names()
+    desired = set(_desired_roles_for_person(p))
+    managed = [roles["team"], roles["fundraising"], roles["leader"], roles["admin"]]
+    return [r for r in managed if r and r not in desired]
 
 
 # -------------------------
@@ -464,3 +547,39 @@ def review_request(approval_id: int, payload: ApprovalReview) -> ApprovalReviewR
         )
 
         return ApprovalReviewResponse(approval=_to_dict(req), stage_changed_to=str(target_stage))
+
+
+@router.post("/sync_roles", response_model=RoleSyncResponse)
+def sync_roles(payload: RoleSyncRequest) -> RoleSyncResponse:
+    """
+    Operator readiness endpoint used by the Discord bot:
+
+    Computes desired Discord roles from a person's access flags:
+      - team_access
+      - fundraising_access
+      - leader_access
+      - is_admin (optional)
+
+    This endpoint is intentionally:
+      - idempotent
+      - non-mutating (no side effects)
+      - safe to call frequently
+    """
+    if payload.person_id is None and not payload.discord_user_id:
+        raise HTTPException(status_code=400, detail="Provide person_id or discord_user_id")
+
+    with get_session() as session:
+        person = _find_person(session, person_id=payload.person_id, discord_user_id=payload.discord_user_id)
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        desired = _desired_roles_for_person(person)
+        removed = _removed_roles_for_person(person)
+
+        # Bot can treat 'added_roles' as "ensure present" (idempotent)
+        return RoleSyncResponse(
+            person_id=int(person.id or 0),
+            desired_roles=desired,
+            added_roles=desired,
+            removed_roles=removed,
+        )

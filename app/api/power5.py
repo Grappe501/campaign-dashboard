@@ -77,9 +77,8 @@ def _sha256(s: str) -> str:
 def _utcnow_naive() -> datetime:
     """
     Keep naive UTC datetimes for DB compatibility if your models use naive UTC.
-    (Some of your older models use datetime.utcnow default_factory.)
     """
-    return datetime.utcnow()
+    return datetime.utcnow().replace(tzinfo=None)
 
 
 def _normalize_channel(channel: str) -> str:
@@ -94,11 +93,16 @@ def _normalize_channel(channel: str) -> str:
 
 
 def _is_invite_expired(inv: Power5Invite) -> bool:
+    """
+    Expiration check that tolerates:
+      - missing expires_at
+      - naive expires_at
+      - tz-aware expires_at
+    """
+    exp = getattr(inv, "expires_at", None)
+    if exp is None:
+        return False
     try:
-        exp = inv.expires_at
-        if exp is None:
-            return False
-        # if expires_at is tz-aware in DB, normalize; otherwise compare naive.
         if getattr(exp, "tzinfo", None) is not None:
             return exp < datetime.now(timezone.utc)
         return exp < _utcnow_naive()
@@ -111,8 +115,12 @@ def _compute_depth(session, team_id: int, parent_person_id: int) -> int:
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
+    leader_id = getattr(team, "leader_person_id", None)
+    if leader_id is None:
+        raise HTTPException(status_code=500, detail="Team model missing leader_person_id")
+
     # If parent is the leader, child is depth 1
-    if parent_person_id == team.leader_person_id:
+    if parent_person_id == int(leader_id):
         return 1
 
     # Otherwise, depth = parent's depth + 1 (must exist)
@@ -122,10 +130,29 @@ def _compute_depth(session, team_id: int, parent_person_id: int) -> int:
     )
     parent_link = session.exec(q).first()
     if not parent_link:
-        # keep simple and strict for now — avoids ambiguous trees
+        # strict: avoids ambiguous trees
         raise HTTPException(status_code=400, detail="Parent is not in the Power5 tree for this team")
 
     return int(getattr(parent_link, "depth", 0) or 0) + 1
+
+
+def _set_if_present(obj: Any, field: str, value: Any) -> None:
+    """
+    Set obj.field=value only if the attribute exists on the object.
+    Defensive against schema drift across milestones.
+    """
+    try:
+        if hasattr(obj, field):
+            setattr(obj, field, value)
+    except Exception:
+        return
+
+
+def _safe_iso(dt: Any) -> str:
+    try:
+        return dt.isoformat()
+    except Exception:
+        return ""
 
 
 # -------------------------
@@ -153,7 +180,6 @@ def upsert_link(team_id: int, payload: Power5LinkUpsert) -> Power5Link:
         if not team:
             raise HTTPException(status_code=404, detail="Team not found")
 
-        # uniqueness: one child per team
         existing = session.exec(
             select(Power5Link).where(
                 Power5Link.power_team_id == team_id,
@@ -165,13 +191,10 @@ def upsert_link(team_id: int, payload: Power5LinkUpsert) -> Power5Link:
 
         if existing:
             existing.parent_person_id = payload.parent_person_id
-            if payload.status is not None and hasattr(existing, "status"):
-                try:
-                    existing.status = payload.status
-                except Exception:
-                    pass
-            if hasattr(existing, "depth"):
-                existing.depth = depth
+            _set_if_present(existing, "depth", depth)
+            if payload.status is not None:
+                _set_if_present(existing, "status", payload.status)
+
             session.add(existing)
             session.commit()
             session.refresh(existing)
@@ -182,13 +205,9 @@ def upsert_link(team_id: int, payload: Power5LinkUpsert) -> Power5Link:
             parent_person_id=payload.parent_person_id,
             child_person_id=payload.child_person_id,
         )
-        if hasattr(link, "depth"):
-            link.depth = depth
-        if payload.status is not None and hasattr(link, "status"):
-            try:
-                link.status = payload.status
-            except Exception:
-                pass
+        _set_if_present(link, "depth", depth)
+        if payload.status is not None:
+            _set_if_present(link, "status", payload.status)
 
         session.add(link)
         session.commit()
@@ -206,6 +225,7 @@ def team_stats(team_id: int) -> Dict[str, Any]:
         rows = list(session.exec(select(Power5Link).where(Power5Link.power_team_id == team_id)).all())
         by_status: Dict[str, int] = {}
         by_depth: Dict[int, int] = {}
+
         for r in rows:
             st = str(getattr(r, "status", "") or "")
             by_status[st] = by_status.get(st, 0) + 1
@@ -215,7 +235,7 @@ def team_stats(team_id: int) -> Dict[str, Any]:
 
         return {
             "power_team_id": team_id,
-            "leader_person_id": team.leader_person_id,
+            "leader_person_id": getattr(team, "leader_person_id", None),
             "links_total": len(rows),
             "by_status": by_status,
             "by_depth": by_depth,
@@ -234,6 +254,7 @@ def team_tree(team_id: int) -> Dict[str, Any]:
 
         rows = list(session.exec(select(Power5Link).where(Power5Link.power_team_id == team_id)).all())
         children: Dict[int, List[Dict[str, Any]]] = {}
+
         for r in rows:
             parent_id = int(getattr(r, "parent_person_id", 0) or 0)
             children.setdefault(parent_id, []).append(
@@ -246,7 +267,7 @@ def team_tree(team_id: int) -> Dict[str, Any]:
 
         return {
             "power_team_id": team_id,
-            "leader_person_id": team.leader_person_id,
+            "leader_person_id": getattr(team, "leader_person_id", None),
             "children": children,
         }
 
@@ -265,19 +286,24 @@ def create_invite(team_id: int, payload: Power5InviteCreate) -> Power5InviteResp
         inv = Power5Invite(
             power_team_id=team_id,
             invited_by_person_id=payload.invited_by_person_id,
-            invitee_person_id=payload.invitee_person_id,
-            channel=ch,
-            destination=payload.destination,
-            token_hash=token_hash,
         )
+
+        # Forward-compatible optional fields
+        _set_if_present(inv, "invitee_person_id", payload.invitee_person_id)
+        _set_if_present(inv, "channel", ch)
+        _set_if_present(inv, "destination", payload.destination)
+        _set_if_present(inv, "token_hash", token_hash)
+
         session.add(inv)
         session.commit()
         session.refresh(inv)
 
+        expires_at = _safe_iso(getattr(inv, "expires_at", None)) if getattr(inv, "expires_at", None) else ""
+
         return Power5InviteResponse(
-            invite_id=inv.id,
+            invite_id=int(getattr(inv, "id", 0) or 0),
             power_team_id=team_id,
-            expires_at=inv.expires_at.isoformat() if getattr(inv, "expires_at", None) else "",
+            expires_at=expires_at,
             token=raw_token,
         )
 
@@ -290,27 +316,33 @@ def consume_invite(payload: Power5ConsumeRequest) -> Power5ConsumeResponse:
     token_hash = _sha256(payload.token)
 
     with get_session() as session:
-        inv = session.exec(select(Power5Invite).where(Power5Invite.token_hash == token_hash)).first()
+        # If token_hash doesn't exist in your model yet, this will throw at query-build time.
+        # That is OK: it means your Power5Invite model is older and needs the token_hash field.
+        inv = session.exec(select(Power5Invite).where(Power5Invite.token_hash == token_hash)).first()  # type: ignore[attr-defined]
         if not inv:
             raise HTTPException(status_code=404, detail="Invite not found")
-        if inv.consumed_at is not None:
+
+        if getattr(inv, "consumed_at", None) is not None:
             raise HTTPException(status_code=400, detail="Invite already consumed")
+
         if _is_invite_expired(inv):
             raise HTTPException(status_code=400, detail="Invite expired")
 
-        inv.consumed_at = _utcnow_naive()
+        now = _utcnow_naive()
+        _set_if_present(inv, "consumed_at", now)
+
         session.add(inv)
         session.commit()
         session.refresh(inv)
 
-        consumed_at = inv.consumed_at.isoformat() if inv.consumed_at else _utcnow_naive().isoformat()
+        consumed_at = _safe_iso(getattr(inv, "consumed_at", None)) or now.isoformat()
 
         return Power5ConsumeResponse(
-            invite_id=inv.id,
-            power_team_id=inv.power_team_id,
-            invited_by_person_id=inv.invited_by_person_id,
-            invitee_person_id=inv.invitee_person_id,
-            channel=str(inv.channel),
-            destination=str(inv.destination),
+            invite_id=int(getattr(inv, "id", 0) or 0),
+            power_team_id=int(getattr(inv, "power_team_id", 0) or 0),
+            invited_by_person_id=int(getattr(inv, "invited_by_person_id", 0) or 0),
+            invitee_person_id=getattr(inv, "invitee_person_id", None),
+            channel=str(getattr(inv, "channel", "") or ""),
+            destination=str(getattr(inv, "destination", "") or ""),
             consumed_at=consumed_at,
         )

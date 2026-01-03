@@ -1140,3 +1140,70 @@ You paste the full current file
 I return a full rewritten file
 
 We track checklist status explicitly
+
+Phase 5.2 synopsis (for your release notes)
+
+Modular Discord bot command system with deterministic registration + required-module fail-closed behavior.
+
+Hardened bot↔backend HTTP layer (api_request) with clamped timeouts, path/method normalization, safe error formatting.
+
+Onboarding, impact logging, approvals, role sync, training, power-of-5, and external proxy command modules organized under app.discord.commands.
+
+Wins automation with debounce cache + pruning to prevent memory growth.
+
+Added requirements.lock.txt to capture reproducible dependency state.
+# Campaign Dashboard (Local-First) — Locked Base v0.4.0 (Phase 5.2)
+
+This repo is the **local-first backend + Discord control-plane** for your campaign operating system:
+
+- FastAPI API server (local)
+- SQLite database (local)
+- Discord bot that calls the local API (local)
+- Optional: Census + BLS lookups via Discord (keys remain local)
+
+> **IMPORTANT:** Your `.env` file is local-only and must never be committed.
+
+---
+
+## What’s in this repo (current reality)
+
+### API Server (FastAPI)
+- `GET /health` → confirms server is running
+- People / Counties / Impact logging + summaries (system of record)
+- Approvals model (request → review → status)
+- Optional external proxy endpoints:
+  - Census proxy (requires `CENSUS_API_KEY` in backend env)
+  - BLS proxy (requires `BLS_API_KEY` in backend env)
+
+### Discord Bot (Control Plane)
+Command modules are organized under `app/discord/commands/` and registered deterministically.
+
+Key commands:
+- `/ping` → sanity check bot config
+- `/start` → onboarding + next steps
+- `/whoami` → identity (helps debug linking)
+- `/log` → log impact actions (call/text/door/event/etc)
+- `/reach` → impact reach summary over a date range
+- `/my_next` → next step prompt
+- `/request_team_access` → request TEAM/FUNDRAISING/LEADER access
+- `/approvals_pending` + buttons → admin review flow
+- `/approve` → legacy admin review (still supported)
+- `/sync_me` → best-effort role sync based on dashboard access flags (optional)
+- `/p5_*` → Power of 5 (optional)
+- `/trainings` + `/training_complete` (optional)
+- `/census` + `/bls` (optional)
+
+**Wins automation (optional):**
+- Watches for a configured emoji and silently POSTs to `/wins/ingest` (best-effort).
+
+---
+
+## Repo setup (Windows PowerShell)
+
+### 1) Create + activate venv
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+
