@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import settings
+# IMPORTANT:
+# Do NOT import `settings` via `from .config import settings` because `app/config.py`
+# intentionally allows `app.config.settings` (bot settings) to coexist, which can
+# shadow/override imports.
+#
+# Backend should always use env vars directly (or a dedicated backend module),
+# never the bot settings module.
 from .database import db_runtime_snapshot, engine, init_db
 
 # Existing routers
@@ -30,19 +37,42 @@ from .api.training import router as training_router
 logger = logging.getLogger(__name__)
 
 
+def _env(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = _env(name, "1" if default else "0").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def _safe_settings_snapshot() -> Dict[str, Any]:
     """
     Non-secret runtime snapshot for operators.
-    Keep this stable and safe (no tokens, no keys).
+    Keep stable and safe (no tokens/keys).
     """
+    cors_raw = _env("CORS_ALLOW_ORIGINS", "*").strip()
     return {
-        "env": getattr(settings, "env", "local"),
-        "app_version": getattr(settings, "app_version", "0.3.x"),
-        "host": getattr(settings, "host", "127.0.0.1"),
-        "port": int(getattr(settings, "port", 8000)),
-        "reload": bool(getattr(settings, "reload", False)),
-        "cors_allow_origins": getattr(settings, "cors_allow_origins", ["*"]),
-        "public_api_base": getattr(settings, "public_api_base", ""),
+        "env": _env("APP_ENV", "local").strip() or "local",
+        "app_version": _env("APP_VERSION", "0.4.0").strip() or "0.4.0",
+        "host": _env("HOST", "127.0.0.1").strip() or "127.0.0.1",
+        "port": _env_int("PORT", 8000),
+        "reload": _env_bool("RELOAD", False),
+        "cors_allow_origins": cors_raw,
+        "public_api_base": _env("PUBLIC_API_BASE", "").strip(),
     }
 
 
@@ -50,7 +80,7 @@ def _db_ok() -> bool:
     """
     Lightweight DB connectivity check for readiness.
 
-    IMPORTANT: uses the shared process engine (no accidental new engine creation).
+    IMPORTANT: uses the shared process engine.
     """
     try:
         with engine.connect() as conn:
@@ -64,12 +94,15 @@ def _db_ok() -> bool:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Campaign Dashboard API",
-        version=getattr(settings, "app_version", "0.3.x"),
+        version=_env("APP_VERSION", "0.4.0").strip() or "0.4.0",
     )
 
     # --- CORS ---
     # For local dev + any hosted UI; Discord bot (server-to-server) doesn't need CORS.
-    allow_origins = getattr(settings, "cors_allow_origins", ["*"])
+    # Keep permissive by default for local.
+    cors_allow = _env("CORS_ALLOW_ORIGINS", "*").strip() or "*"
+    allow_origins = ["*"] if cors_allow == "*" else [o.strip() for o in cors_allow.split(",") if o.strip()]
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
@@ -81,9 +114,8 @@ def create_app() -> FastAPI:
     # --- Startup ---
     @app.on_event("startup")
     def _startup() -> None:
-        # Creates tables for all registered SQLModel models (idempotent for SQLite)
         init_db()
-        logger.info("API startup complete (version=%s)", getattr(settings, "app_version", "0.3.x"))
+        logger.info("API startup complete (version=%s)", _env("APP_VERSION", "0.4.0").strip() or "0.4.0")
 
     # --- Friendly error envelope (API callers + bot) ---
     @app.exception_handler(HTTPException)
@@ -120,7 +152,7 @@ def create_app() -> FastAPI:
 
     @app.get("/version", tags=["meta"])
     def version() -> Dict[str, Any]:
-        return {"version": getattr(settings, "app_version", "0.3.x")}
+        return {"version": _env("APP_VERSION", "0.4.0").strip() or "0.4.0"}
 
     # --- API routers ---
     app.include_router(people_router)
@@ -146,12 +178,15 @@ app = create_app()
 
 
 def run() -> None:
-    logging.basicConfig(level=getattr(logging, str(settings.log_level).upper(), logging.INFO))
+    # Use LOG_LEVEL from env; default INFO.
+    level_name = (_env("LOG_LEVEL", "INFO").strip() or "INFO").upper()
+    logging.basicConfig(level=getattr(logging, level_name, logging.INFO))
+
     import uvicorn
 
     uvicorn.run(
         "app.main:app",
-        host=getattr(settings, "host", "127.0.0.1"),
-        port=int(getattr(settings, "port", 8000)),
-        reload=bool(getattr(settings, "reload", False)),
+        host=_env("HOST", "127.0.0.1").strip() or "127.0.0.1",
+        port=_env_int("PORT", 8000),
+        reload=_env_bool("RELOAD", False),
     )

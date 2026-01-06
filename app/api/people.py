@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import uuid
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr, Field as PydField
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from ..database import get_session
@@ -17,6 +20,7 @@ router = APIRouter(prefix="/people", tags=["people"])
 # Schemas (do NOT use DB model as input)
 # -----------------------------
 
+
 class PersonCreate(BaseModel):
     tracking_number: str = PydField(..., min_length=3)
     name: str = PydField(..., min_length=1)
@@ -29,6 +33,7 @@ class PersonCreate(BaseModel):
     stage: Optional[VolunteerStage] = VolunteerStage.OBSERVER
 
     # geography
+    zip_code: Optional[str] = None
     region: Optional[str] = None
     county: Optional[str] = None
     city: Optional[str] = None
@@ -46,6 +51,7 @@ class PersonPatch(BaseModel):
     """
     Partial update. Any field omitted is left unchanged.
     """
+
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
@@ -55,6 +61,7 @@ class PersonPatch(BaseModel):
     stage: Optional[VolunteerStage] = None
 
     # geography
+    zip_code: Optional[str] = None
     region: Optional[str] = None
     county: Optional[str] = None
     city: Optional[str] = None
@@ -85,6 +92,7 @@ class PersonReplace(BaseModel):
 
     tracking_number is included but must match the existing record (immutable).
     """
+
     tracking_number: str = PydField(..., min_length=3)
     name: str = PydField(..., min_length=1)
 
@@ -96,6 +104,7 @@ class PersonReplace(BaseModel):
     stage: VolunteerStage = VolunteerStage.OBSERVER
 
     # geography
+    zip_code: Optional[str] = None
     region: Optional[str] = None
     county: Optional[str] = None
     city: Optional[str] = None
@@ -123,6 +132,7 @@ class DiscordUpsert(BaseModel):
     """
     Discord-first identity upsert. This is the backbone of onboarding.
     """
+
     discord_user_id: str = PydField(..., min_length=3)
     name: str = PydField(..., min_length=1)
 
@@ -134,6 +144,7 @@ class DiscordUpsert(BaseModel):
     recruited_by_person_id: Optional[int] = None
 
     # Optional geo
+    zip_code: Optional[str] = None
     region: Optional[str] = None
     county: Optional[str] = None
     city: Optional[str] = None
@@ -145,10 +156,37 @@ class DiscordUpsert(BaseModel):
     username: Optional[str] = None
 
 
+class DiscordRegisterRequest(BaseModel):
+    """
+    Discord registration: capture the minimum we need to place a volunteer.
+    This is the endpoint the bot expects:
+      POST /people/discord/register
+    """
+
+    discord_user_id: str = PydField(..., min_length=3)
+    name: str = PydField(..., min_length=1)
+
+    # Placement hook (string to preserve leading zeros / allow ZIP+4)
+    zip_code: str = PydField(..., min_length=3, max_length=10)
+
+    # Optional enrichment
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+
+    # Optional: link recruit source
+    recruited_by_person_id: Optional[int] = None
+
+    # Optional Discord context (for audit / sync hardening)
+    guild_id: Optional[str] = None
+    channel_id: Optional[str] = None
+    username: Optional[str] = None
+
+
 class OnboardRequest(BaseModel):
     """
     Mark a person as onboarded + return next-step suggestions.
     """
+
     person_id: Optional[int] = None
     discord_user_id: Optional[str] = None
 
@@ -162,6 +200,7 @@ class OnboardRequest(BaseModel):
     phone: Optional[str] = None
     county: Optional[str] = None
     city: Optional[str] = None
+    zip_code: Optional[str] = None
 
     # Consent flags (optional)
     allow_discord_comms: Optional[bool] = None
@@ -205,9 +244,13 @@ def _normalize_stage(stage: Optional[VolunteerStage]) -> VolunteerStage:
     return stage or VolunteerStage.OBSERVER
 
 
+def _tracking_hash(seed: str) -> str:
+    s = (seed or "").strip().encode("utf-8")
+    return hashlib.sha1(s).hexdigest()[:12] if s else uuid.uuid4().hex[:12]
+
+
 def _ensure_tracking_number(seed: str) -> str:
-    suffix = (seed or "000000")[-6:]
-    return f"TN-{utcnow().strftime('%Y%m%d')}-{suffix}"
+    return f"TN-{utcnow().strftime('%Y%m%d')}-{_tracking_hash(seed)}"
 
 
 def _person_to_dict(p: Person) -> Dict[str, Any]:
@@ -224,8 +267,11 @@ def _person_to_dict(p: Person) -> Dict[str, Any]:
             "stage": str(p.stage) if getattr(p, "stage", None) is not None else None,
             "stage_locked": bool(getattr(p, "stage_locked", False)),
             "onboarded_at": getattr(p, "onboarded_at", None),
+            "zip_code": getattr(p, "zip_code", None),
+            "region": getattr(p, "region", None),
             "county": getattr(p, "county", None),
             "city": getattr(p, "city", None),
+            "precinct": getattr(p, "precinct", None),
         }
 
     d["team_access"] = bool(getattr(p, "team_access", False))
@@ -233,7 +279,6 @@ def _person_to_dict(p: Person) -> Dict[str, Any]:
     d["leader_access"] = bool(getattr(p, "leader_access", False))
     d["is_admin"] = bool(getattr(p, "is_admin", False))
 
-    # Legacy mirrors
     d["team"] = d["team_access"]
     d["fundraising"] = d["fundraising_access"]
     d["leader"] = d["leader_access"]
@@ -308,9 +353,49 @@ def _apply_access_updates(
     return changed
 
 
+def _maybe_set_zip(p: Person, raw_zip: Optional[str]) -> None:
+    if raw_zip is None:
+        return
+    try:
+        setter = getattr(p, "set_zip_code", None)
+        if callable(setter):
+            setter(raw_zip)
+        else:
+            p.zip_code = (str(raw_zip).strip()[:10] or None)
+    except Exception:
+        try:
+            p.zip_code = (str(raw_zip).strip()[:10] or None)
+        except Exception:
+            pass
+
+
+def _commit_or_raise_conflict(session, *, detail: str = "Conflict saving record") -> None:
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=detail)
+
+
+def _commit_with_tracking_retry(session, person: Person, *, max_attempts: int = 2) -> None:
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            session.commit()
+            return
+        except IntegrityError:
+            session.rollback()
+            if attempt >= max_attempts or getattr(person, "id", None) is not None:
+                raise HTTPException(status_code=409, detail="Conflict creating person (unique constraint).")
+            person.tracking_number = f"TN-{utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:12]}"
+            session.add(person)
+
+
 # -----------------------------
 # Routes
 # -----------------------------
+
 
 @router.post("/", response_model=Person)
 def create_person(payload: PersonCreate) -> Person:
@@ -336,6 +421,7 @@ def create_person(payload: PersonCreate) -> Person:
         allow_discord_comms=payload.allow_discord_comms,
         allow_leaderboard=payload.allow_leaderboard,
     )
+    _maybe_set_zip(person, payload.zip_code)
 
     with get_session() as session:
         existing = session.exec(select(Person).where(Person.tracking_number == person.tracking_number)).first()
@@ -343,17 +429,86 @@ def create_person(payload: PersonCreate) -> Person:
             raise HTTPException(status_code=409, detail="tracking_number already exists")
 
         session.add(person)
-        session.commit()
+        _commit_or_raise_conflict(session, detail="Conflict saving person (unique constraint).")
         session.refresh(person)
         return person
+
+
+@router.post("/discord/register", response_model=OnboardResponse)
+def register_from_discord(payload: DiscordRegisterRequest) -> OnboardResponse:
+    with get_session() as session:
+        p = session.exec(select(Person).where(Person.discord_user_id == payload.discord_user_id)).first()
+        created = False
+
+        if not p:
+            created = True
+            p = Person(
+                tracking_number=_ensure_tracking_number(payload.discord_user_id),
+                name=payload.name,
+                email=str(payload.email) if payload.email else None,
+                phone=payload.phone,
+                discord_user_id=payload.discord_user_id,
+                stage=VolunteerStage.NEW,
+                stage_locked=False,
+                stage_last_changed_at=utcnow(),
+                stage_changed_reason="auto:register_from_discord",
+                recruited_by_person_id=payload.recruited_by_person_id,
+            )
+        else:
+            if payload.name:
+                p.name = payload.name
+            if payload.email is not None:
+                p.email = str(payload.email) if payload.email else None
+            if payload.phone is not None:
+                p.phone = payload.phone
+            if payload.recruited_by_person_id is not None:
+                p.recruited_by_person_id = payload.recruited_by_person_id
+
+            if p.stage == VolunteerStage.OBSERVER and not bool(getattr(p, "stage_locked", False)):
+                apply_stage_change(
+                    session=session,
+                    person=p,
+                    new_stage=VolunteerStage.NEW,
+                    reason="register:observer->new",
+                    lock_stage=False,
+                )
+
+        _maybe_set_zip(p, payload.zip_code)
+
+        try:
+            p.mark_onboarded()
+        except Exception:
+            if getattr(p, "onboarded_at", None) is None:
+                p.onboarded_at = utcnow()
+
+        try:
+            p.note_discord_seen(
+                guild_id=payload.guild_id,
+                channel_id=payload.channel_id,
+                username=payload.username,
+            )
+        except Exception:
+            pass
+
+        session.add(p)
+
+        if created:
+            _commit_with_tracking_retry(session, p)
+        else:
+            _commit_or_raise_conflict(session, detail="Conflict updating person (unique constraint).")
+
+        session.refresh(p)
+        return OnboardResponse(person=_person_to_dict(p), next_steps=_next_steps_for_person(p))
 
 
 @router.post("/discord/upsert", response_model=Person)
 def upsert_from_discord(payload: DiscordUpsert) -> Person:
     with get_session() as session:
         p = session.exec(select(Person).where(Person.discord_user_id == payload.discord_user_id)).first()
+        created = False
 
         if not p:
+            created = True
             p = Person(
                 tracking_number=_ensure_tracking_number(payload.discord_user_id),
                 name=payload.name,
@@ -370,6 +525,7 @@ def upsert_from_discord(payload: DiscordUpsert) -> Person:
                 precinct=payload.precinct,
                 recruited_by_person_id=payload.recruited_by_person_id,
             )
+            _maybe_set_zip(p, payload.zip_code)
         else:
             if payload.name:
                 p.name = payload.name
@@ -377,6 +533,9 @@ def upsert_from_discord(payload: DiscordUpsert) -> Person:
                 p.email = str(payload.email) if payload.email else None
             if payload.phone is not None:
                 p.phone = payload.phone
+
+            if payload.zip_code is not None:
+                _maybe_set_zip(p, payload.zip_code)
 
             if payload.region is not None:
                 p.region = payload.region
@@ -400,7 +559,12 @@ def upsert_from_discord(payload: DiscordUpsert) -> Person:
             pass
 
         session.add(p)
-        session.commit()
+
+        if created:
+            _commit_with_tracking_retry(session, p)
+        else:
+            _commit_or_raise_conflict(session, detail="Conflict updating person (unique constraint).")
+
         session.refresh(p)
         return p
 
@@ -425,6 +589,8 @@ def onboard(payload: OnboardRequest) -> OnboardResponse:
             p.county = payload.county
         if payload.city is not None:
             p.city = payload.city
+        if payload.zip_code is not None:
+            _maybe_set_zip(p, payload.zip_code)
 
         if payload.allow_discord_comms is not None:
             p.allow_discord_comms = payload.allow_discord_comms
@@ -453,10 +619,13 @@ def onboard(payload: OnboardRequest) -> OnboardResponse:
                 reason="onboard:observer->new",
                 lock_stage=False,
             )
+            session.add(p)
+            _commit_or_raise_conflict(session, detail="Conflict updating person (unique constraint).")
+            session.refresh(p)
             return OnboardResponse(person=_person_to_dict(p), next_steps=_next_steps_for_person(p))
 
         session.add(p)
-        session.commit()
+        _commit_or_raise_conflict(session, detail="Conflict updating person (unique constraint).")
         session.refresh(p)
         return OnboardResponse(person=_person_to_dict(p), next_steps=_next_steps_for_person(p))
 
@@ -489,7 +658,6 @@ def list_people(
         return list(session.exec(q).all())
 
 
-# IMPORTANT: put static routes BEFORE /{person_id} to avoid 422 from int casting
 @router.get("/by_tracking/{tracking_number}", response_model=Person)
 def get_person_by_tracking(tracking_number: str) -> Person:
     with get_session() as session:
@@ -515,7 +683,6 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
         if not p:
             raise HTTPException(status_code=404, detail="Person not found")
 
-        # Stage change (safe only)
         if payload.stage is not None and payload.stage != p.stage:
             _ensure_stage_unlocked_for_manual_change(p)
             _ensure_not_gated(payload.stage)
@@ -536,6 +703,9 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
         if payload.discord_user_id is not None:
             p.discord_user_id = payload.discord_user_id
 
+        if payload.zip_code is not None:
+            _maybe_set_zip(p, payload.zip_code)
+
         if payload.region is not None:
             p.region = payload.region
         if payload.county is not None:
@@ -555,7 +725,6 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
         if payload.allow_leaderboard is not None:
             p.allow_leaderboard = payload.allow_leaderboard
 
-        # Access updates (canonical + legacy aliases)
         if bool(getattr(p, "stage_locked", False)) and (
             payload.team_access is not None
             or payload.fundraising_access is not None
@@ -578,7 +747,7 @@ def patch_person(person_id: int, payload: PersonPatch) -> Person:
         )
 
         session.add(p)
-        session.commit()
+        _commit_or_raise_conflict(session, detail="Conflict updating person (unique constraint).")
         session.refresh(p)
         return p
 
@@ -608,6 +777,9 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
         p.email = str(payload.email) if payload.email else None
         p.phone = payload.phone
         p.discord_user_id = payload.discord_user_id
+
+        if payload.zip_code is not None:
+            _maybe_set_zip(p, payload.zip_code)
 
         p.region = payload.region
         p.county = payload.county
@@ -641,7 +813,7 @@ def replace_person(person_id: int, payload: PersonReplace) -> Person:
         )
 
         session.add(p)
-        session.commit()
+        _commit_or_raise_conflict(session, detail="Conflict updating person (unique constraint).")
         session.refresh(p)
         return p
 
@@ -653,12 +825,10 @@ def get_person_impact(person_id: int) -> Dict[str, Any]:
         if not p:
             raise HTTPException(status_code=404, detail="Person not found")
 
-        # Import lazily so missing/renamed module doesn't crash API startup.
         try:
             from ..services.impact_engine import compute_impact  # type: ignore
         except Exception:
             raise HTTPException(status_code=501, detail="Impact engine not available in this build")
 
         summary = compute_impact(session, person_id)
-        # summary may be a dataclass; normalize to dict
         return summary.__dict__ if hasattr(summary, "__dict__") else {"summary": summary}

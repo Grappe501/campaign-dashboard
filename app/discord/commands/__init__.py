@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # - We want those toggles to be stable even if we rename files later
 # - We must not silently "think" something loaded when it didn't
 #
-# Phase 5.2 hardening:
+# Hardening goals:
 # - Deterministic module ordering
 # - Clear logging of what loaded/registered/failed
 # - Fail-closed for required modules (so the bot doesn't come up "half working")
@@ -48,9 +48,7 @@ REQUIRED_MODULES: Sequence[str] = (
 )
 
 # Canonical name -> module filename on disk (without package prefix)
-# If the target module does not exist, we will fall back to the canonical name.
-# This lets the code survive future refactors:
-# - If you later add commands/role_sync.py, it will take precedence.
+# Operators may toggle either the canonical name (trainings) or the file name (training).
 _MODULE_ALIASES: Dict[str, str] = {
     "trainings": "training",
     "role_sync": "_me",
@@ -83,30 +81,11 @@ def _normalize_token(s: str) -> str:
     return (s or "").strip().lower()
 
 
-def _resolve_module_filename(canonical: str) -> str:
-    """
-    Resolve canonical capability name to an actual python module filename.
-
-    Strategy:
-    - Prefer a real module that exists under the canonical name.
-    - Otherwise use alias mapping.
-    - If neither exists, return canonical (and import will fail with a clear report).
-    """
-    name = _normalize_token(canonical)
-    alias = _MODULE_ALIASES.get(name)
-
-    # Prefer canonical if present on disk; we can’t reliably check filesystem here
-    # without additional imports/IO, so we implement a safe import fallback:
-    # - try canonical import first
-    # - if missing module, try alias import
-    return name if not alias else name  # initial attempt always canonical
-
-
 def _candidate_module_names(canonical: str) -> List[str]:
     """
     Import candidates in deterministic order:
-    1) canonical name
-    2) alias target (if defined and different)
+    1) canonical capability name (e.g., "trainings")
+    2) alias target filename (e.g., "training") if configured and different
     """
     name = _normalize_token(canonical)
     alias = _MODULE_ALIASES.get(name)
@@ -116,7 +95,7 @@ def _candidate_module_names(canonical: str) -> List[str]:
     return cands
 
 
-def _should_register(module_name: str) -> bool:
+def _should_register(canonical: str) -> bool:
     """
     Apply allow/deny lists if present.
     Defaults to register all MODULES.
@@ -130,7 +109,7 @@ def _should_register(module_name: str) -> bool:
     allow = _env_list("DISCORD_COMMANDS_ALLOW")
     deny = _env_list("DISCORD_COMMANDS_DENY")
 
-    name = _normalize_token(module_name)
+    name = _normalize_token(canonical)
     aliases = set(_candidate_module_names(name))  # canonical + alias filename(s)
 
     if allow is not None:
@@ -197,13 +176,10 @@ def register_all(bot: "discord.Client", tree: "app_commands.CommandTree") -> Non
     Each module must expose:
         def register(bot, tree) -> None
 
-    Phase 5.2 hardening:
+    Hardening:
       - deterministic registration report in logs
       - fail-closed if any REQUIRED_MODULE fails to import/register
-
-    Phase 5.3 Operator Readiness:
-      - canonical module names map to real python modules (alias support)
-      - registration summary includes resolved import target
+      - alias support (canonical capability -> on-disk module filename)
     """
     pkg = __name__  # e.g. "app.discord.commands"
     results: Dict[str, str] = {}
@@ -221,11 +197,11 @@ def register_all(bot: "discord.Client", tree: "app_commands.CommandTree") -> Non
             results[canonical] = "skipped (allow/deny)"
             continue
 
-        # Try canonical module name first, then alias filename (if configured)
-        loaded_mod = None
-        loaded_path = None
-        last_err = None
+        loaded_mod: Optional[object] = None
+        loaded_path: Optional[str] = None
+        last_err: Optional[str] = None
 
+        # Try canonical name first, then alias filename (if configured)
         for candidate in _candidate_module_names(canonical):
             mod_path = f"{pkg}.{candidate}"
             mod, err = _import_module(mod_path)

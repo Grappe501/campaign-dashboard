@@ -33,6 +33,10 @@ def _require_positive_int(value: object, field: str) -> int:
 
 class PowerTeam(SQLModel, table=True):
     __tablename__ = "power_teams"
+    __table_args__ = (
+        # Critical for the “universal pathway”: one PowerTeam per leader.
+        UniqueConstraint("leader_person_id", name="uq_power_teams_leader_person"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
 

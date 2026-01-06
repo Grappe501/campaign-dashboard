@@ -1,0 +1,2644 @@
+{
+  "summary": {
+    "root": "C:\\Users\\User\\Desktop\\campaign-dashboard",
+    "file_count": 80,
+    "python_files": 62,
+    "api_files": 12,
+    "discord_files": 17,
+    "model_files": 16,
+    "endpoints": [
+      {
+        "method": "GET",
+        "full_path": "/approvals/",
+        "file": "app/api/approvals.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/approvals/pending",
+        "file": "app/api/approvals.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/approvals/request",
+        "file": "app/api/approvals.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/approvals/sync_roles",
+        "file": "app/api/approvals.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/approvals/{approval_id}",
+        "file": "app/api/approvals.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/approvals/{approval_id}/review",
+        "file": "app/api/approvals.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/bootstrap/power5_team",
+        "file": "app/api/bootstrap.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/bootstrap/rules",
+        "file": "app/api/bootstrap.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/counties/",
+        "file": "app/api/counties.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/counties/by-name/{name}",
+        "file": "app/api/counties.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/counties/refresh-snapshots",
+        "file": "app/api/counties.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/counties/{fips5}",
+        "file": "app/api/counties.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/events/",
+        "file": "app/api/events.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/events/",
+        "file": "app/api/events.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/external/bls/series",
+        "file": "app/api/external.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/external/census/county_population",
+        "file": "app/api/external.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/external/census/county_snapshot",
+        "file": "app/api/external.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/external/census/refresh_counties",
+        "file": "app/api/external.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/impact/actions",
+        "file": "app/api/impact.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/impact/reach/summary",
+        "file": "app/api/impact.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/people/",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/people/",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/people/by_tracking/{tracking_number}",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/people/discord/upsert",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/people/onboard",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/people/{person_id}",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "PATCH",
+        "full_path": "/people/{person_id}",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "PUT",
+        "full_path": "/people/{person_id}",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/people/{person_id}/impact",
+        "file": "app/api/people.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/power5/invites/claim",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/power5/invites/consume",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/power5/invites/create",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/power5/teams/{team_id}/invites",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/power5/teams/{team_id}/links",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/power5/teams/{team_id}/stats",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/power5/teams/{team_id}/tree",
+        "file": "app/api/power5.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/teams/",
+        "file": "app/api/teams.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/teams/",
+        "file": "app/api/teams.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/teams/{team_id}",
+        "file": "app/api/teams.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/teams/{team_id}/members",
+        "file": "app/api/teams.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/teams/{team_id}/members",
+        "file": "app/api/teams.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/training/complete",
+        "file": "app/api/training.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/training/completions",
+        "file": "app/api/training.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/training/modules",
+        "file": "app/api/training.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/training/progress",
+        "file": "app/api/training.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/voters/",
+        "file": "app/api/voters.py"
+      },
+      {
+        "method": "POST",
+        "full_path": "/voters/",
+        "file": "app/api/voters.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/voters/steps/all",
+        "file": "app/api/voters.py"
+      },
+      {
+        "method": "GET",
+        "full_path": "/voters/{voter_id}",
+        "file": "app/api/voters.py"
+      },
+      {
+        "method": "PATCH",
+        "full_path": "/voters/{voter_id}",
+        "file": "app/api/voters.py"
+      }
+    ],
+    "discord_commands": [
+      {
+        "name": "approvals_pending",
+        "file": "app/discord/commands/approvals.py",
+        "kind": "tree"
+      },
+      {
+        "name": "approve",
+        "file": "app/discord/commands/approvals.py",
+        "kind": "tree"
+      },
+      {
+        "name": "bls",
+        "file": "app/discord/commands/external.py",
+        "kind": "tree"
+      },
+      {
+        "name": "census",
+        "file": "app/discord/commands/external.py",
+        "kind": "tree"
+      },
+      {
+        "name": "config",
+        "file": "app/discord/commands/core.py",
+        "kind": "tree"
+      },
+      {
+        "name": "help",
+        "file": "app/discord/help.py",
+        "kind": "tree"
+      },
+      {
+        "name": "links",
+        "file": "app/discord/help.py",
+        "kind": "tree"
+      },
+      {
+        "name": "log",
+        "file": "app/discord/commands/impact.py",
+        "kind": "tree"
+      },
+      {
+        "name": "my_next",
+        "file": "app/discord/commands/impact.py",
+        "kind": "tree"
+      },
+      {
+        "name": "my_trainings",
+        "file": "app/discord/commands/training.py",
+        "kind": "tree"
+      },
+      {
+        "name": "p5_invite",
+        "file": "app/discord/commands/power5.py",
+        "kind": "tree"
+      },
+      {
+        "name": "p5_link",
+        "file": "app/discord/commands/power5.py",
+        "kind": "tree"
+      },
+      {
+        "name": "p5_stats",
+        "file": "app/discord/commands/power5.py",
+        "kind": "tree"
+      },
+      {
+        "name": "p5_tree",
+        "file": "app/discord/commands/power5.py",
+        "kind": "tree"
+      },
+      {
+        "name": "ping",
+        "file": "app/discord/commands/core.py",
+        "kind": "tree"
+      },
+      {
+        "name": "power_of_5",
+        "file": "app/discord/commands/power5.py",
+        "kind": "tree"
+      },
+      {
+        "name": "reach",
+        "file": "app/discord/commands/impact.py",
+        "kind": "tree"
+      },
+      {
+        "name": "request_team_access",
+        "file": "app/discord/commands/approvals.py",
+        "kind": "tree"
+      },
+      {
+        "name": "start",
+        "file": "app/discord/commands/onboarding.py",
+        "kind": "tree"
+      },
+      {
+        "name": "sync_me",
+        "file": "app/discord/commands/_me.py",
+        "kind": "tree"
+      },
+      {
+        "name": "sync_me",
+        "file": "app/discord/commands/access.py",
+        "kind": "tree"
+      },
+      {
+        "name": "sync_me",
+        "file": "app/discord/commands/role_sync.py",
+        "kind": "tree"
+      },
+      {
+        "name": "training_complete",
+        "file": "app/discord/commands/training.py",
+        "kind": "tree"
+      },
+      {
+        "name": "trainings",
+        "file": "app/discord/commands/training.py",
+        "kind": "tree"
+      },
+      {
+        "name": "whoami",
+        "file": "app/discord/commands/onboarding.py",
+        "kind": "tree"
+      },
+      {
+        "name": "wins_help",
+        "file": "app/discord/commands/core.py",
+        "kind": "tree"
+      },
+      {
+        "name": "x",
+        "file": "repo_map.py",
+        "kind": "decorator"
+      },
+      {
+        "name": "x",
+        "file": "repo_map.py",
+        "kind": "tree"
+      },
+      {
+        "name": "x",
+        "file": "repo_map.py",
+        "kind": "tree"
+      }
+    ],
+    "models": [
+      {
+        "model": "AliceCounty",
+        "file": "app/models/alice_county.py"
+      },
+      {
+        "model": "ApprovalRequest",
+        "file": "app/models/approval_request.py"
+      },
+      {
+        "model": "County",
+        "file": "app/models/county.py"
+      },
+      {
+        "model": "CountySnapshot",
+        "file": "app/models/county_snapshot.py"
+      },
+      {
+        "model": "Event",
+        "file": "app/models/event.py"
+      },
+      {
+        "model": "ImpactAction",
+        "file": "app/models/impact_action.py"
+      },
+      {
+        "model": "ImpactReachSnapshot",
+        "file": "app/models/impact_reach_snapshot.py"
+      },
+      {
+        "model": "ImpactRule",
+        "file": "app/models/impact_rule.py"
+      },
+      {
+        "model": "Person",
+        "file": "app/models/person.py"
+      },
+      {
+        "model": "Power5Invite",
+        "file": "app/models/power5_invite.py"
+      },
+      {
+        "model": "Power5Link",
+        "file": "app/models/power5_link.py"
+      },
+      {
+        "model": "PowerTeam",
+        "file": "app/models/power_team.py"
+      },
+      {
+        "model": "PowerTeamMember",
+        "file": "app/models/power_team.py"
+      },
+      {
+        "model": "TrainingCompletion",
+        "file": "app/models/training_completion.py"
+      },
+      {
+        "model": "TrainingModule",
+        "file": "app/models/training_module.py"
+      },
+      {
+        "model": "VoterContact",
+        "file": "app/models/voter.py"
+      }
+    ],
+    "env_vars": [
+      "DASHBOARD_DOTENV_DISABLE",
+      "DASHBOARD_DOTENV_PATH"
+    ],
+    "settings_keys": [
+      "admin_roles_raw",
+      "app_version",
+      "bls_api_key",
+      "census_api_key",
+      "cors_allow_origins",
+      "dashboard_api_base",
+      "discord_bot_token",
+      "discord_guild_id",
+      "discord_help_url",
+      "discord_sync_guild_only",
+      "enable_role_sync",
+      "enable_training_system",
+      "enable_wins_automation",
+      "env",
+      "first_actions_channel_name",
+      "host",
+      "http_timeout_s",
+      "http_user_agent",
+      "lead_roles_raw",
+      "log_level",
+      "onboarding_url",
+      "openai_api_key",
+      "port",
+      "public_api_base",
+      "py",
+      "redacted_dict",
+      "reload",
+      "resolved_database_url",
+      "role_admin",
+      "role_fundraising",
+      "role_leader",
+      "role_team",
+      "sqlite_auto_migrate",
+      "validate",
+      "volunteer_form_url",
+      "wins_channel_name",
+      "wins_require_channel",
+      "wins_trigger_emoji"
+    ],
+    "wiring": {
+      "api_entrypoints": [
+        "run_api.py",
+        "app/main.py"
+      ],
+      "bot_entrypoints": [
+        "run_bot.py",
+        "app/discord/bot.py"
+      ],
+      "model_registry": [
+        "app/models/__init__.py"
+      ],
+      "db": [
+        "app/database.py"
+      ],
+      "routers_dir": "app/api/",
+      "discord_commands_dir": "app/discord/commands/",
+      "models_dir": "app/models/"
+    }
+  },
+  "files": [
+    {
+      "path": ".env",
+      "kind": "text",
+      "bytes": 2429,
+      "lines": 82,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": ".env.example",
+      "kind": "text",
+      "bytes": 1845,
+      "lines": 69,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": ".gitignore",
+      "kind": "other",
+      "bytes": 229,
+      "lines": 0,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "campaign-dashboard_v0.4.0.zip",
+      "kind": "other",
+      "bytes": 58329091,
+      "lines": 0,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "fix_port_8010_to_8000.py",
+      "kind": "python",
+      "bytes": 1784,
+      "lines": 70,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from pathlib import Path"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "LICENSE",
+      "kind": "text",
+      "bytes": 113,
+      "lines": 6,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "README.md",
+      "kind": "markdown",
+      "bytes": 25838,
+      "lines": 1235,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "REPO_MAP.json",
+      "kind": "text",
+      "bytes": 64937,
+      "lines": 2369,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [
+        "py"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "REPO_MAP.md",
+      "kind": "markdown",
+      "bytes": 12255,
+      "lines": 463,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [
+        "py"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "repo_map.py",
+      "kind": "python",
+      "bytes": 12555,
+      "lines": 374,
+      "imports": [
+        "from __future__ import annotations",
+        "import ast",
+        "import json",
+        "import os",
+        "import re",
+        "from dataclasses import dataclass, asdict",
+        "from pathlib import Path",
+        "from typing import Any, Dict, List, Optional, Tuple"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "x",
+          "kind": "decorator"
+        },
+        {
+          "name": "x",
+          "kind": "tree"
+        },
+        {
+          "name": "x",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "requirements-lock.txt",
+      "kind": "text",
+      "bytes": 795,
+      "lines": 45,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "requirements.lock.txt",
+      "kind": "text",
+      "bytes": 795,
+      "lines": 45,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "requirements.txt",
+      "kind": "text",
+      "bytes": 182,
+      "lines": 10,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "run_api.py",
+      "kind": "python",
+      "bytes": 818,
+      "lines": 32,
+      "imports": [
+        "import logging",
+        "import sys",
+        "from app.main import run"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "run_bot.py",
+      "kind": "python",
+      "bytes": 926,
+      "lines": 33,
+      "imports": [
+        "import logging",
+        "import sys",
+        "from app.discord.bot import run_bot"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/config.py",
+      "kind": "python",
+      "bytes": 8956,
+      "lines": 270,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from pathlib import Path as _Path",
+        "import json",
+        "from pathlib import Path",
+        "from typing import Any, List, Dict",
+        "from pydantic import Field, field_validator",
+        "from pydantic_settings import BaseSettings, SettingsConfigDict"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "py"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/database.py",
+      "kind": "python",
+      "bytes": 13280,
+      "lines": 394,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from contextlib import contextmanager",
+        "from typing import Generator, List, Optional",
+        "from sqlalchemy import event, text",
+        "from sqlalchemy.engine import Engine",
+        "from sqlmodel import SQLModel, Session, create_engine",
+        "from .config import settings",
+        "from . import models as _models  # noqa: F401"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "resolved_database_url",
+        "sqlite_auto_migrate"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": [
+        "DB engine lifecycle + init_db + optional SQLite micro-migrate"
+      ]
+    },
+    {
+      "path": "app/main.py",
+      "kind": "python",
+      "bytes": 4942,
+      "lines": 158,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from typing import Any, Dict",
+        "from fastapi import FastAPI, HTTPException, Request",
+        "from fastapi.middleware.cors import CORSMiddleware",
+        "from fastapi.responses import JSONResponse",
+        "from .config import settings",
+        "from .database import db_runtime_snapshot, engine, init_db",
+        "from .api.people import router as people_router",
+        "from .api.teams import router as teams_router",
+        "from .api.voters import router as voters_router",
+        "from .api.events import router as events_router",
+        "from .api.external import router as external_router",
+        "from .api.counties import router as counties_router",
+        "from .api.power5 import router as power5_router",
+        "from .api.impact import router as impact_router",
+        "from .api.bootstrap import router as bootstrap_router",
+        "from .api.approvals import router as approvals_router",
+        "from .api.training import router as training_router",
+        "import uvicorn"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "app_version",
+        "cors_allow_origins",
+        "env",
+        "host",
+        "log_level",
+        "port",
+        "public_api_base",
+        "reload"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": [
+        "FastAPI boot + router include surface"
+      ]
+    },
+    {
+      "path": "app/__init__.py",
+      "kind": "python",
+      "bytes": 0,
+      "lines": 1,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/approvals.py",
+      "kind": "python",
+      "bytes": 20187,
+      "lines": 586,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from typing import Optional, Any, Dict, Literal, List, cast, Tuple",
+        "from fastapi import APIRouter, HTTPException",
+        "from pydantic import BaseModel",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.approval_request import ApprovalRequest, ApprovalStatus, ApprovalType",
+        "from ..models.person import Person, VolunteerStage, utcnow",
+        "from ..services.stage_engine import apply_stage_change"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/approvals"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/request"
+        },
+        {
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/pending"
+        },
+        {
+          "method": "GET",
+          "path": "/{approval_id}"
+        },
+        {
+          "method": "POST",
+          "path": "/{approval_id}/review"
+        },
+        {
+          "method": "POST",
+          "path": "/sync_roles"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/bootstrap.py",
+      "kind": "python",
+      "bytes": 3761,
+      "lines": 107,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional, Dict, Any",
+        "from uuid import uuid4",
+        "from fastapi import APIRouter",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.person import Person",
+        "from ..models.power_team import PowerTeam",
+        "from ..models.impact_rule import ImpactRule",
+        "from ..api.impact import DEFAULT_RULES"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/bootstrap"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/rules"
+        },
+        {
+          "method": "POST",
+          "path": "/power5_team"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/counties.py",
+      "kind": "python",
+      "bytes": 9281,
+      "lines": 252,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import date",
+        "from typing import Any, Dict, List, Optional, Tuple",
+        "from fastapi import APIRouter, Depends, HTTPException, Query",
+        "from sqlmodel import Session, select",
+        "from sqlalchemy.exc import OperationalError",
+        "from app.database import get_db",
+        "from app.models.county import County",
+        "from app.models.county_snapshot import CountySnapshot",
+        "from app.models.alice_county import AliceCounty",
+        "from app.services.census import fetch_many_county_snapshots_acs5, fetch_county_snapshot_acs5"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/counties"
+      ],
+      "api_endpoints": [
+        {
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/by-name/{name}"
+        },
+        {
+          "method": "GET",
+          "path": "/{fips5}"
+        },
+        {
+          "method": "POST",
+          "path": "/refresh-snapshots"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/events.py",
+      "kind": "python",
+      "bytes": 608,
+      "lines": 22,
+      "imports": [
+        "from __future__ import annotations",
+        "from fastapi import APIRouter",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.event import Event"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/events"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/external.py",
+      "kind": "python",
+      "bytes": 2996,
+      "lines": 112,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import List",
+        "from fastapi import APIRouter, HTTPException, Query",
+        "from ..services.census import (",
+        "from ..services.bls import series"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/external"
+      ],
+      "api_endpoints": [
+        {
+          "method": "GET",
+          "path": "/census/county_population"
+        },
+        {
+          "method": "GET",
+          "path": "/census/county_snapshot"
+        },
+        {
+          "method": "POST",
+          "path": "/census/refresh_counties"
+        },
+        {
+          "method": "GET",
+          "path": "/bls/series"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/impact.py",
+      "kind": "python",
+      "bytes": 11499,
+      "lines": 317,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Any, Dict, Optional, Tuple",
+        "from fastapi import APIRouter, HTTPException",
+        "from pydantic import BaseModel, Field as PydField",
+        "from sqlalchemy.exc import IntegrityError",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.impact_action import ImpactAction, ActionChannel, ActionSource",
+        "from ..models.impact_rule import ImpactRule"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/impact"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/actions"
+        },
+        {
+          "method": "GET",
+          "path": "/reach/summary"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/people.py",
+      "kind": "python",
+      "bytes": 22613,
+      "lines": 665,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import Optional, Dict, Any, List",
+        "from fastapi import APIRouter, HTTPException",
+        "from pydantic import BaseModel, EmailStr, Field as PydField",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.person import Person, VolunteerStage, utcnow",
+        "from ..services.stage_engine import apply_stage_change",
+        "from ..services.impact_engine import compute_impact  # type: ignore"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/people"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/"
+        },
+        {
+          "method": "POST",
+          "path": "/discord/upsert"
+        },
+        {
+          "method": "POST",
+          "path": "/onboard"
+        },
+        {
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/by_tracking/{tracking_number}"
+        },
+        {
+          "method": "GET",
+          "path": "/{person_id}"
+        },
+        {
+          "method": "PATCH",
+          "path": "/{person_id}"
+        },
+        {
+          "method": "PUT",
+          "path": "/{person_id}"
+        },
+        {
+          "method": "GET",
+          "path": "/{person_id}/impact"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/power5.py",
+      "kind": "python",
+      "bytes": 19001,
+      "lines": 571,
+      "imports": [
+        "from __future__ import annotations",
+        "import hashlib",
+        "import logging",
+        "import secrets",
+        "from datetime import datetime, timezone",
+        "from typing import Any, Dict, List, Optional",
+        "from fastapi import APIRouter, HTTPException",
+        "from pydantic import BaseModel, Field as PydField",
+        "from sqlalchemy.exc import IntegrityError",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.power5_invite import Power5Invite",
+        "from ..models.power5_link import POWER5_STATUSES, normalize_status",
+        "from ..models.power5_link import Power5Link",
+        "from ..models.power_team import PowerTeam"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/power5"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/teams/{team_id}/links"
+        },
+        {
+          "method": "GET",
+          "path": "/teams/{team_id}/stats"
+        },
+        {
+          "method": "GET",
+          "path": "/teams/{team_id}/tree"
+        },
+        {
+          "method": "POST",
+          "path": "/teams/{team_id}/invites"
+        },
+        {
+          "method": "POST",
+          "path": "/invites/consume"
+        },
+        {
+          "method": "POST",
+          "path": "/invites/create"
+        },
+        {
+          "method": "POST",
+          "path": "/invites/claim"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/teams.py",
+      "kind": "python",
+      "bytes": 5702,
+      "lines": 176,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import List, Optional",
+        "from fastapi import APIRouter, HTTPException",
+        "from pydantic import BaseModel, Field as PydField",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.person import Person",
+        "from ..models.power_team import PowerTeam, PowerTeamMember"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/teams"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/{team_id}"
+        },
+        {
+          "method": "POST",
+          "path": "/{team_id}/members"
+        },
+        {
+          "method": "GET",
+          "path": "/{team_id}/members"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/training.py",
+      "kind": "python",
+      "bytes": 7697,
+      "lines": 255,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Any, Dict, List, Optional",
+        "from fastapi import APIRouter, Depends, HTTPException, Query",
+        "from pydantic import BaseModel, Field as PydField",
+        "from sqlmodel import Session, select",
+        "from app.database import get_db",
+        "from app.models.person import Person",
+        "from app.models.training_completion import TrainingCompletion",
+        "from app.models.training_module import TrainingModule"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/training"
+      ],
+      "api_endpoints": [
+        {
+          "method": "GET",
+          "path": "/modules"
+        },
+        {
+          "method": "GET",
+          "path": "/completions"
+        },
+        {
+          "method": "GET",
+          "path": "/progress"
+        },
+        {
+          "method": "POST",
+          "path": "/complete"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/voters.py",
+      "kind": "python",
+      "bytes": 3658,
+      "lines": 123,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import Any, Dict, List, Optional",
+        "from fastapi import APIRouter, HTTPException",
+        "from pydantic import BaseModel",
+        "from sqlmodel import select",
+        "from ..database import get_session",
+        "from ..models.voter import VoterContact, VOTER_STEPS"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [
+        "/voters"
+      ],
+      "api_endpoints": [
+        {
+          "method": "POST",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "method": "GET",
+          "path": "/{voter_id}"
+        },
+        {
+          "method": "PATCH",
+          "path": "/{voter_id}"
+        },
+        {
+          "method": "GET",
+          "path": "/steps/all"
+        }
+      ],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/api/__init__.py",
+      "kind": "python",
+      "bytes": 0,
+      "lines": 1,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/config/settings.py",
+      "kind": "python",
+      "bytes": 8291,
+      "lines": 220,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from dataclasses import dataclass",
+        "from typing import Optional",
+        "from urllib.parse import urlparse"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/data/ar_counties.json",
+      "kind": "text",
+      "bytes": 588,
+      "lines": 12,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/data/Release_notes/v0.2.3.md",
+      "kind": "markdown",
+      "bytes": 658,
+      "lines": 23,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/data/Release_notes/v0.3.0-ms-baseline",
+      "kind": "other",
+      "bytes": 4507,
+      "lines": 0,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/discord/bot.py",
+      "kind": "python",
+      "bytes": 17953,
+      "lines": 494,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "import os",
+        "import re",
+        "import time",
+        "from typing import Any, Dict, Optional, Tuple",
+        "import discord",
+        "import httpx",
+        "from discord import app_commands",
+        "from .commands import register_all",
+        "from .commands.impact import format_log_suggestion",
+        "from .commands.shared import api_request, infer_channel_from_action_type",
+        "from .config import settings"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "dashboard_api_base",
+        "discord_bot_token",
+        "discord_guild_id",
+        "discord_sync_guild_only",
+        "enable_role_sync",
+        "enable_wins_automation",
+        "http_timeout_s",
+        "http_user_agent",
+        "log_level",
+        "redacted_dict",
+        "validate",
+        "wins_channel_name",
+        "wins_require_channel",
+        "wins_trigger_emoji"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord bot entry: setup_hook registers command modules"
+      ]
+    },
+    {
+      "path": "app/discord/COMMAND_RULES.md",
+      "kind": "markdown",
+      "bytes": 7632,
+      "lines": 234,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/discord/help.py",
+      "kind": "python",
+      "bytes": 2829,
+      "lines": 74,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import TYPE_CHECKING, List, Optional",
+        "from discord import app_commands",
+        "from ...config.settings import settings",
+        "import discord"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "discord_help_url",
+        "first_actions_channel_name",
+        "onboarding_url",
+        "volunteer_form_url",
+        "wins_channel_name",
+        "wins_trigger_emoji"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "help",
+          "kind": "tree"
+        },
+        {
+          "name": "links",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/discord/__init__.py",
+      "kind": "python",
+      "bytes": 358,
+      "lines": 14,
+      "imports": [
+        "from __future__ import annotations",
+        "from .bot import DashboardBot, bot, run_bot"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/discord/commands/access.py",
+      "kind": "python",
+      "bytes": 9207,
+      "lines": 259,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import TYPE_CHECKING, List, Optional",
+        "import discord",
+        "from discord import app_commands",
+        "from ...config.settings import settings",
+        "from .shared import api_request, format_api_error",
+        "import httpx"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "enable_role_sync",
+        "role_fundraising",
+        "role_leader",
+        "role_team"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "sync_me",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/approvals.py",
+      "kind": "python",
+      "bytes": 22186,
+      "lines": 618,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple",
+        "import discord",
+        "import httpx",
+        "from discord import app_commands",
+        "from ...config.settings import settings",
+        "from .shared import (",
+        "from discord import Interaction",
+        "from discord import app_commands as app_commands_typing"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "admin_roles_raw",
+        "enable_role_sync",
+        "lead_roles_raw",
+        "wins_channel_name"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "request_team_access",
+          "kind": "tree"
+        },
+        {
+          "name": "approvals_pending",
+          "kind": "tree"
+        },
+        {
+          "name": "approve",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/core.py",
+      "kind": "python",
+      "bytes": 9092,
+      "lines": 254,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple",
+        "import discord",
+        "from discord import app_commands",
+        "from ...config.settings import settings",
+        "from .shared import split_csv",
+        "from discord import Interaction"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "admin_roles_raw",
+        "dashboard_api_base",
+        "discord_guild_id",
+        "discord_help_url",
+        "enable_role_sync",
+        "enable_training_system",
+        "enable_wins_automation",
+        "first_actions_channel_name",
+        "lead_roles_raw",
+        "onboarding_url",
+        "role_fundraising",
+        "role_leader",
+        "role_team",
+        "volunteer_form_url",
+        "wins_channel_name",
+        "wins_trigger_emoji"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "ping",
+          "kind": "tree"
+        },
+        {
+          "name": "wins_help",
+          "kind": "tree"
+        },
+        {
+          "name": "config",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/external.py",
+      "kind": "python",
+      "bytes": 7833,
+      "lines": 227,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple",
+        "from discord import app_commands",
+        "from .shared import api_request, format_api_error",
+        "import discord",
+        "import httpx"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "census",
+          "kind": "tree"
+        },
+        {
+          "name": "bls",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/impact.py",
+      "kind": "python",
+      "bytes": 11653,
+      "lines": 295,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from datetime import datetime",
+        "from typing import TYPE_CHECKING, Any, Dict, List, Optional",
+        "from discord import app_commands",
+        "from .shared import (",
+        "import discord",
+        "import httpx"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "log",
+          "kind": "tree"
+        },
+        {
+          "name": "reach",
+          "kind": "tree"
+        },
+        {
+          "name": "my_next",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/onboarding.py",
+      "kind": "python",
+      "bytes": 7276,
+      "lines": 191,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import Any, List, Optional",
+        "import discord",
+        "from discord import app_commands",
+        "from ...config.settings import settings",
+        "from .shared import api_request, ensure_person_by_discord, format_api_error, next_step_for_stage"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "discord_help_url",
+        "first_actions_channel_name",
+        "onboarding_url",
+        "volunteer_form_url",
+        "wins_channel_name",
+        "wins_trigger_emoji"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "start",
+          "kind": "tree"
+        },
+        {
+          "name": "whoami",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/power5.py",
+      "kind": "python",
+      "bytes": 39268,
+      "lines": 978,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict",
+        "import discord",
+        "from discord import app_commands",
+        "from .shared import api_request, ensure_person_by_discord, format_api_error",
+        "import httpx"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "power_of_5",
+          "kind": "tree"
+        },
+        {
+          "name": "p5_stats",
+          "kind": "tree"
+        },
+        {
+          "name": "p5_invite",
+          "kind": "tree"
+        },
+        {
+          "name": "p5_link",
+          "kind": "tree"
+        },
+        {
+          "name": "p5_tree",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/role_sync.py",
+      "kind": "python",
+      "bytes": 5336,
+      "lines": 154,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from typing import TYPE_CHECKING, List",
+        "import discord",
+        "from discord import app_commands",
+        "from .shared import api_request, format_api_error, ensure_person_by_discord",
+        "from ..config.settings import settings",
+        "from discord import Interaction",
+        "from ..bot import DashboardBot"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "role_admin",
+        "role_fundraising",
+        "role_leader",
+        "role_team"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "sync_me",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/shared.py",
+      "kind": "python",
+      "bytes": 12487,
+      "lines": 390,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from datetime import datetime",
+        "from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable",
+        "from urllib.parse import urlparse",
+        "import httpx",
+        "from ..config import settings"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "dashboard_api_base",
+        "first_actions_channel_name",
+        "http_timeout_s",
+        "http_user_agent",
+        "role_fundraising",
+        "role_leader",
+        "role_team",
+        "wins_channel_name",
+        "wins_trigger_emoji"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/training.py",
+      "kind": "python",
+      "bytes": 9018,
+      "lines": 248,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import TYPE_CHECKING, Any, Dict, List, Optional",
+        "from discord import app_commands",
+        "from .shared import api_request, ensure_person_by_discord, format_api_error",
+        "import discord",
+        "import httpx"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "trainings",
+          "kind": "tree"
+        },
+        {
+          "name": "training_complete",
+          "kind": "tree"
+        },
+        {
+          "name": "my_trainings",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/_me.py",
+      "kind": "python",
+      "bytes": 5380,
+      "lines": 155,
+      "imports": [
+        "from __future__ import annotations",
+        "import logging",
+        "from typing import TYPE_CHECKING, Optional",
+        "import discord",
+        "from discord import app_commands",
+        "from .shared import ensure_person_by_discord, format_api_error",
+        "from ...config.settings import settings",
+        "from discord import Interaction"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "enable_role_sync"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [
+        {
+          "name": "sync_me",
+          "kind": "tree"
+        }
+      ],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/commands/__init__.py",
+      "kind": "python",
+      "bytes": 9686,
+      "lines": 270,
+      "imports": [
+        "from __future__ import annotations",
+        "import importlib",
+        "import logging",
+        "import os",
+        "from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple",
+        "import discord",
+        "from discord import app_commands"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": [
+        "Discord command module"
+      ]
+    },
+    {
+      "path": "app/discord/config/settings.py",
+      "kind": "python",
+      "bytes": 14232,
+      "lines": 378,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from dataclasses import dataclass",
+        "from typing import Optional, List, Dict, Any",
+        "from urllib.parse import urlparse"
+      ],
+      "env_vars": [
+        "DASHBOARD_DOTENV_DISABLE",
+        "DASHBOARD_DOTENV_PATH"
+      ],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/discord/config/__init__.py",
+      "kind": "python",
+      "bytes": 118,
+      "lines": 6,
+      "imports": [
+        "from __future__ import annotations",
+        "from .settings import Settings, settings"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/models/alice_county.py",
+      "kind": "python",
+      "bytes": 1181,
+      "lines": 37,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timezone",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "AliceCounty"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/approval_request.py",
+      "kind": "python",
+      "bytes": 1683,
+      "lines": 62,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timezone",
+        "from enum import Enum",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "ApprovalRequest"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/county.py",
+      "kind": "python",
+      "bytes": 1798,
+      "lines": 46,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timezone",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "County"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/county_snapshot.py",
+      "kind": "python",
+      "bytes": 1933,
+      "lines": 53,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import date, datetime, timezone",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "CountySnapshot"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/event.py",
+      "kind": "python",
+      "bytes": 1044,
+      "lines": 38,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "Event"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/impact_action.py",
+      "kind": "python",
+      "bytes": 2087,
+      "lines": 68,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timezone",
+        "from enum import Enum",
+        "from typing import Any, Dict, Optional",
+        "from sqlalchemy import Column",
+        "from sqlalchemy.types import JSON",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "ImpactAction"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/impact_reach_snapshot.py",
+      "kind": "python",
+      "bytes": 925,
+      "lines": 27,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, date",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "ImpactReachSnapshot"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/impact_rule.py",
+      "kind": "python",
+      "bytes": 598,
+      "lines": 22,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlmodel import SQLModel, Field"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "ImpactRule"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/person.py",
+      "kind": "python",
+      "bytes": 6231,
+      "lines": 191,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from enum import Enum",
+        "from typing import Optional, Set",
+        "from sqlalchemy import event",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "Person"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/power5_invite.py",
+      "kind": "python",
+      "bytes": 6227,
+      "lines": 172,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timedelta",
+        "from typing import Optional",
+        "from sqlalchemy import event",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "Power5Invite"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/power5_link.py",
+      "kind": "python",
+      "bytes": 5786,
+      "lines": 156,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlalchemy import UniqueConstraint, event",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "Power5Link"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/power_team.py",
+      "kind": "python",
+      "bytes": 4629,
+      "lines": 133,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlalchemy import UniqueConstraint, event",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "PowerTeam",
+        "PowerTeamMember"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/training_completion.py",
+      "kind": "python",
+      "bytes": 1280,
+      "lines": 41,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "TrainingCompletion"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/training_module.py",
+      "kind": "python",
+      "bytes": 2727,
+      "lines": 86,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "TrainingModule"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/voter.py",
+      "kind": "python",
+      "bytes": 2209,
+      "lines": 75,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime",
+        "from typing import Optional",
+        "from sqlalchemy import event",
+        "from sqlmodel import Field, SQLModel"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [
+        "VoterContact"
+      ],
+      "notes": []
+    },
+    {
+      "path": "app/models/__init__.py",
+      "kind": "python",
+      "bytes": 1338,
+      "lines": 51,
+      "imports": [
+        "from .person import Person",
+        "from .voter import VoterContact",
+        "from .event import Event",
+        "from .alice_county import AliceCounty",
+        "from .county import County",
+        "from .county_snapshot import CountySnapshot",
+        "from .power_team import PowerTeam, PowerTeamMember",
+        "from .power5_invite import Power5Invite",
+        "from .power5_link import Power5Link",
+        "from .impact_action import ImpactAction",
+        "from .impact_reach_snapshot import ImpactReachSnapshot",
+        "from .impact_rule import ImpactRule",
+        "from .approval_request import ApprovalRequest, ApprovalStatus, ApprovalType",
+        "from .training_module import TrainingModule",
+        "from .training_completion import TrainingCompletion"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/scripts/migrate_people_stage_fields.py",
+      "kind": "python",
+      "bytes": 6845,
+      "lines": 208,
+      "imports": [
+        "from __future__ import annotations",
+        "import os",
+        "from datetime import datetime, timezone",
+        "from typing import Dict, List, Optional",
+        "from sqlalchemy import text",
+        "from sqlmodel import Session",
+        "from app.database import engine"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/scripts/seed_counties.py",
+      "kind": "python",
+      "bytes": 3852,
+      "lines": 112,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timezone",
+        "from typing import Dict, List, Optional",
+        "from sqlmodel import select",
+        "from app.database import init_db, session_scope",
+        "from app.models.county import County"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/scripts/seed_training.py",
+      "kind": "python",
+      "bytes": 3914,
+      "lines": 123,
+      "imports": [
+        "from __future__ import annotations",
+        "from datetime import datetime, timezone",
+        "from typing import Dict, List, Optional",
+        "from sqlmodel import select",
+        "from app.database import init_db, session_scope",
+        "from app.models.training_module import TrainingModule"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/services/ai.py",
+      "kind": "python",
+      "bytes": 411,
+      "lines": 16,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import Optional",
+        "from openai import OpenAI",
+        "from ..config import settings"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "openai_api_key"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/services/bls.py",
+      "kind": "python",
+      "bytes": 938,
+      "lines": 28,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import Any, Dict, List",
+        "import httpx",
+        "from ..config import settings"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "bls_api_key"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/services/census.py",
+      "kind": "python",
+      "bytes": 7523,
+      "lines": 223,
+      "imports": [
+        "from __future__ import annotations",
+        "from typing import Any, Dict, List, Optional, Tuple",
+        "from datetime import datetime, timezone",
+        "import httpx",
+        "from ..config import settings"
+      ],
+      "env_vars": [],
+      "settings_keys": [
+        "census_api_key"
+      ],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/services/impact_engine.py",
+      "kind": "python",
+      "bytes": 4737,
+      "lines": 143,
+      "imports": [
+        "from __future__ import annotations",
+        "from dataclasses import dataclass",
+        "from typing import Optional",
+        "from sqlmodel import Session, text"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "app/services/stage_engine.py",
+      "kind": "python",
+      "bytes": 7408,
+      "lines": 241,
+      "imports": [
+        "from __future__ import annotations",
+        "from dataclasses import dataclass",
+        "from typing import Optional, Tuple",
+        "from sqlmodel import Session",
+        "from app.models.person import Person, VolunteerStage, utcnow"
+      ],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "backend/data/app.db",
+      "kind": "other",
+      "bytes": 208896,
+      "lines": 0,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "data/.gitkeep",
+      "kind": "other",
+      "bytes": 0,
+      "lines": 0,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    },
+    {
+      "path": "data/campaign.sqlite",
+      "kind": "other",
+      "bytes": 520192,
+      "lines": 0,
+      "imports": [],
+      "env_vars": [],
+      "settings_keys": [],
+      "api_router_prefixes": [],
+      "api_endpoints": [],
+      "discord_commands": [],
+      "sqlmodel_tables": [],
+      "notes": []
+    }
+  ]
+}

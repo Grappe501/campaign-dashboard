@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import event
+from sqlalchemy import UniqueConstraint, event
 from sqlmodel import Field, SQLModel
 
 
@@ -44,9 +44,23 @@ class Power5Link(SQLModel, table=True):
     """
     Represents a recruitment edge inside a PowerTeam:
       parent (recruiter) -> child (recruit)
+
+    DB guarantees we rely on:
+      - A child can only appear once per team (one parent per child within a team).
     """
 
     __tablename__ = "power5_links"
+    __table_args__ = (
+        # Enforce "one child per team" at the DB level (matches API upsert behavior).
+        UniqueConstraint("power_team_id", "child_person_id", name="uq_power5_links_team_child"),
+        # Optional extra safety: prevents accidental duplicate edges even if logic changes.
+        UniqueConstraint(
+            "power_team_id",
+            "parent_person_id",
+            "child_person_id",
+            name="uq_power5_links_team_parent_child",
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
 
@@ -117,8 +131,6 @@ def _validate_and_normalize(target: Power5Link) -> None:
     if st == "active" and getattr(target, "activated_at", None) is None:
         target.activated_at = now
 
-    # If churned, we don't force timestamps, but we do keep them sane if set.
-
     # Sanity ordering (only compare datetimes)
     inv = getattr(target, "invited_at", None)
     ob = getattr(target, "onboarded_at", None)
@@ -126,7 +138,6 @@ def _validate_and_normalize(target: Power5Link) -> None:
     created = getattr(target, "created_at", None)
 
     if isinstance(created, datetime) and isinstance(inv, datetime) and inv < created:
-        # invited_at predating created_at is almost always data-entry error
         raise ValueError("Power5Link.invited_at must be >= created_at.")
     if isinstance(inv, datetime) and isinstance(ob, datetime) and ob < inv:
         raise ValueError("Power5Link.onboarded_at must be >= invited_at.")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Optional
+import os
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 import discord
 from discord import app_commands
@@ -14,6 +15,38 @@ if TYPE_CHECKING:
 
 def _normalize_name(s: str) -> str:
     return (s or "").strip().lower()
+
+
+def _env(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = _env(name, "1" if default else "0").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _parse_channel_ref(raw: str) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Accept:
+      - numeric channel id
+      - channel name (no #)
+      - "#channel-name"
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None, None
+    if s.startswith("#"):
+        s = s[1:].strip()
+    if s.isdigit():
+        try:
+            return int(s), None
+        except Exception:
+            return None, None
+    return None, s
 
 
 def _member_has_any_role(member: discord.abc.User, role_specs: list[str]) -> bool:
@@ -110,9 +143,39 @@ def _feature_flags_summary() -> str:
     parts = [
         f"WINS_AUTOMATION={'ON' if settings.enable_wins_automation else 'OFF'}",
         f"ROLE_SYNC={'ON' if settings.enable_role_sync else 'OFF'}",
+        f"TRAINING_SYSTEM={'ON' if settings.enable_training_system else 'OFF'}",
         f"TRIGGER_EMOJI={emoji}",
     ]
     return ", ".join(parts)
+
+
+def _wins_bundle_summary() -> str:
+    """
+    These are read by the bot process (env-level toggles).
+    We show them in /config for operator clarity.
+    """
+    react_on = _env_bool("DASHBOARD_WINS_REACT", True)
+    party_on = _env_bool("DASHBOARD_WINS_REACT_PARTY", True)
+    reply_on = _env_bool("DASHBOARD_WINS_REPLY", True)
+    autolog_on = _env_bool("DASHBOARD_WINS_AUTOLOG", True)
+    forward_on = _env_bool("DASHBOARD_WINS_FORWARD", True)
+    forward_raw = _env("DASHBOARD_WINS_FORWARD_CHANNEL", "").strip()
+    _, forward_name = _parse_channel_ref(forward_raw)
+
+    forward_label = "(not set)"
+    if forward_raw:
+        if forward_raw.strip().lstrip("#").isdigit():
+            forward_label = f"(id) {forward_raw.strip()}"
+        else:
+            forward_label = f"#{(forward_name or forward_raw).strip().lstrip('#')}"
+
+    return (
+        f"REACT={'ON' if react_on else 'OFF'}, "
+        f"PARTY={'ON' if party_on else 'OFF'}, "
+        f"REPLY={'ON' if reply_on else 'OFF'}, "
+        f"AUTOLOG={'ON' if autolog_on else 'OFF'}, "
+        f"FORWARD={'ON' if forward_on else 'OFF'} -> {forward_label}"
+    )
 
 
 def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
@@ -120,8 +183,9 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
     Core sanity + config commands.
 
     Keep this module intentionally small and stable:
-      - /ping   sanity check
-      - /config show current bot configuration (admin-only)
+      - /ping      sanity check
+      - /wins_help volunteer instructions for ✅ wins
+      - /config    admin: show bot configuration (safe values only)
     """
 
     @tree.command(name="ping", description="Sanity check: bot is alive.")
@@ -136,6 +200,28 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             f"Features: {_feature_flags_summary()}",
             ephemeral=True,
         )
+
+    @tree.command(name="wins_help", description="How to post wins so the bot auto-reacts, logs, and routes them.")
+    async def wins_help(interaction: "discord.Interaction") -> None:
+        trigger = (settings.wins_trigger_emoji or "✅").strip() or "✅"
+        wins_chan = (settings.wins_channel_name or "wins-and-updates").strip()
+
+        msg = (
+            "🏁 **How to post a win (so it auto-runs):**\n"
+            f"1) Go to **#{wins_chan}**\n"
+            f"2) Post your win message **including the emoji** `{trigger}` in the message text.\n"
+            "   Example: `✅ I made 15 calls today!`\n"
+            "\n"
+            "**Important:** A *reaction-only* ✅ does **not** trigger automation (the bot watches message text).\n"
+            "\n"
+            "After you post, the bot will:\n"
+            "- react ✅ (and 🎉)\n"
+            "- reply with a short `/log ...` suggestion\n"
+            "- auto-log into the dashboard (best-effort)\n"
+            "- forward to the leader channel (if configured)\n"
+        )
+
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @tree.command(name="config", description="Admin: show bot configuration (API base + guild sync).")
     @_guard(_is_admin, "❌ Admin only. You need a configured admin role or Manage Server permission.")
@@ -161,6 +247,7 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
             f"- ONBOARDING_URL: {settings.onboarding_url or '(not set)'}\n"
             f"- VOLUNTEER_FORM_URL: {settings.volunteer_form_url or '(not set)'}\n"
             f"- DISCORD_HELP_URL: {settings.discord_help_url or '(not set)'}\n"
-            f"- FEATURES: {_feature_flags_summary()}",
+            f"- FEATURES: {_feature_flags_summary()}\n"
+            f"- WINS_PIPELINE: {_wins_bundle_summary()}",
             ephemeral=True,
         )

@@ -105,6 +105,10 @@ class Person(SQLModel, table=True):
     stage_changed_reason: Optional[str] = Field(default=None)
 
     # ---- Geographic placement ----
+    # Zip is the first (and easiest) geographic hook we can ask for in Discord.
+    # Keep as string to preserve leading zeros and allow ZIP+4 in the future.
+    zip_code: Optional[str] = Field(default=None, index=True, max_length=10)
+
     region: Optional[str] = Field(default=None, index=True)
     county: Optional[str] = Field(default=None, index=True)
     city: Optional[str] = Field(default=None, index=True)
@@ -157,6 +161,40 @@ class Person(SQLModel, table=True):
         if username:
             self.last_seen_discord_username = username
 
+    def set_zip_code(self, raw: Optional[str]) -> None:
+        """
+        Best-effort normalization for ZIP.
+        Accepts:
+          - '72201'
+          - '72201-1234'
+          - '722011234' (will be stored as '72201-1234')
+        Stores None if empty.
+        """
+        if raw is None:
+            self.zip_code = None
+            return
+
+        s = str(raw).strip()
+        if not s:
+            self.zip_code = None
+            return
+
+        # keep digits only
+        digits = "".join(ch for ch in s if ch.isdigit())
+
+        # ZIP5
+        if len(digits) == 5:
+            self.zip_code = digits
+            return
+
+        # ZIP9 -> ZIP+4 formatting
+        if len(digits) == 9:
+            self.zip_code = f"{digits[:5]}-{digits[5:]}"
+            return
+
+        # If it doesn't match a known safe pattern, keep it as a trimmed raw string (bounded by max_length)
+        self.zip_code = s[:10]
+
     # Optional helpers for code readability (no DB impact)
     def has_team_access(self) -> bool:
         return bool(self.team_access)
@@ -172,6 +210,7 @@ class Person(SQLModel, table=True):
 
 
 # --- Auto-touch timestamps ---
+
 
 @event.listens_for(Person, "before_insert")
 def _person_before_insert(mapper, connection, target) -> None:  # noqa: ANN001

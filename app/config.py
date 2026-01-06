@@ -1,5 +1,34 @@
 from __future__ import annotations
 
+"""
+IMPORTANT (Operator Readiness / Bot + API coexistence)
+
+This repo intentionally has BOTH:
+  - app/config.py              -> backend (FastAPI) settings (pydantic)
+  - app/config/settings.py     -> discord-bot settings (stdlib dataclass)
+
+Normally, having app/config.py would SHADOW the app/config/ package directory,
+breaking imports like:  import app.config.settings
+
+To support BOTH, we make this module behave like a package by defining __path__
+to include the sibling directory "app/config/".
+
+This allows:
+  - backend: from app.config import settings          (this file)
+  - bot:     from app.config.settings import settings (submodule in folder)
+"""
+
+import os as _os
+from pathlib import Path as _Path
+
+# ---- Package shim: allow `import app.config.settings` to resolve to ./config/settings.py
+_config_dir = _Path(__file__).with_name("config")
+if _config_dir.is_dir():
+    __path__ = [str(_config_dir)]  # type: ignore[name-defined]
+else:
+    # If the folder doesn't exist, don't pretend we are a package.
+    __path__ = []  # type: ignore[name-defined]
+
 import json
 from pathlib import Path
 from typing import Any, List, Dict

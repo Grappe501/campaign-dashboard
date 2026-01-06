@@ -2,13 +2,61 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator, List, Optional
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlmodel import SQLModel, Session, create_engine
 
-from .config import settings
+
+def _env(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = _env(name, "1" if default else "0").strip().lower()
+    return raw in ("1", "true", "yes", "y", "on")
+
+
+def _resolved_database_url() -> str:
+    """
+    Resolve DB URL without importing app.config.
+
+    Why:
+    - app/config.py intentionally "acts like a package" so `app.config.settings`
+      exists for the Discord bot.
+    - That makes `from app.config import settings` ambiguous and can import the
+      bot settings module instead of the backend Settings() instance.
+    - DB must be unambiguous and always boot.
+
+    Priority:
+      1) DATABASE_URL if provided
+      2) Build sqlite:/// URL from DB_PATH
+    """
+    database_url = _env("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
+
+    path = _env("DB_PATH", "./data/campaign.sqlite").strip() or "./data/campaign.sqlite"
+
+    # If already a sqlite URL, accept it
+    if path.startswith("sqlite:"):
+        return path
+
+    p = Path(path)
+
+    # If relative, anchor to cwd with ./ prefix for sqlite URL consistency
+    if not p.is_absolute():
+        if str(p).startswith("./"):
+            return f"sqlite:///{p.as_posix()}"
+        return f"sqlite:///./{p.as_posix()}"
+
+    # Absolute path needs 4 slashes after scheme (sqlite:////abs/path)
+    return f"sqlite:////{p.as_posix().lstrip('/')}"
 
 
 def _is_sqlite(database_url: str) -> bool:
@@ -19,16 +67,50 @@ def _is_postgres(database_url: str) -> bool:
     return (database_url or "").startswith("postgresql")
 
 
+def _sqlite_file_path_from_url(database_url: str) -> Optional[str]:
+    """
+    Extract a filesystem path from common SQLite URL forms.
+
+    Supports:
+      - sqlite:///./data/campaign.sqlite
+      - sqlite:////absolute/path/to/db.sqlite
+
+    Returns None for:
+      - sqlite:// (in-memory / invalid forms)
+      - non-sqlite URLs
+    """
+    if not _is_sqlite(database_url):
+        return None
+
+    s = (database_url or "").strip()
+
+    # Absolute path form
+    if s.startswith("sqlite:////"):
+        # sqlite:////abs/path -> /abs/path
+        return "/" + s[len("sqlite:////") :]
+
+    # Relative path form
+    if s.startswith("sqlite:///"):
+        return s[len("sqlite:///") :]
+
+    # Other sqlite forms (e.g., sqlite://, sqlite:///:memory:) — ignore
+    return None
+
+
 def _ensure_sqlite_dir(database_url: str) -> None:
     """
     Ensure the parent folder exists for SQLite file-based DB URLs like:
       sqlite:///./data/campaign.sqlite
       sqlite:////absolute/path/to/db.sqlite
     """
-    if not (database_url or "").startswith("sqlite:///"):
+    path = _sqlite_file_path_from_url(database_url)
+    if not path:
         return
 
-    path = database_url.replace("sqlite:///", "", 1)
+    # If it's :memory: or otherwise non-file, do nothing
+    if path.strip() in (":memory:", ""):
+        return
+
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
@@ -39,7 +121,7 @@ def _sqlite_pragmas(engine: Engine) -> None:
     Pragmas that make SQLite usable for multi-request local dev and larger datasets.
     Safe defaults that won't corrupt data.
 
-    NOTE: This function attaches a SQLAlchemy 'connect' event listener to the engine.
+    NOTE: This attaches a SQLAlchemy 'connect' event listener to the engine.
     It must be called exactly once per engine instance.
     """
 
@@ -66,11 +148,9 @@ def _postgres_session_settings(engine: Engine) -> None:
     def _set_postgres_settings(dbapi_connection, connection_record):  # noqa: ANN001
         try:
             cursor = dbapi_connection.cursor()
-            # 30 seconds; tune later
             cursor.execute("SET statement_timeout = 30000;")
             cursor.close()
         except Exception:
-            # Don't block startup if provider disallows it
             pass
 
 
@@ -84,20 +164,15 @@ _ENGINE: Optional[Engine] = None
 def get_engine() -> Engine:
     """
     Return the single shared SQLAlchemy engine for this process.
-
-    Operator Readiness:
-    - This must NOT create a new engine each call.
-    - Health checks should use this shared engine so pragmas/pools are consistent.
-
-    Uses settings.resolved_database_url:
-      DATABASE_URL (preferred) OR fallback DB_PATH
     """
     global _ENGINE
 
     if _ENGINE is not None:
         return _ENGINE
 
-    database_url = settings.resolved_database_url
+    database_url = str(_resolved_database_url() or "").strip()
+    if not database_url:
+        raise RuntimeError("Resolved DATABASE_URL is empty. Check DATABASE_URL or DB_PATH in .env.")
 
     if _is_sqlite(database_url):
         _ensure_sqlite_dir(database_url)
@@ -109,8 +184,6 @@ def get_engine() -> Engine:
         echo=False,
         connect_args=connect_args,
         pool_pre_ping=True,
-        # When you move to Postgres and have concurrency, you can add:
-        # pool_size=5, max_overflow=10
     )
 
     if _is_sqlite(database_url):
@@ -123,7 +196,6 @@ def get_engine() -> Engine:
     return _ENGINE
 
 
-# Public shared engine (backwards compatible import sites)
 engine: Engine = get_engine()
 
 
@@ -132,8 +204,8 @@ def db_runtime_snapshot() -> dict:
     Non-secret snapshot useful for operators and /meta style endpoints.
     """
     return {
-        "resolved_database_url": getattr(settings, "resolved_database_url", ""),
-        "sqlite_auto_migrate": bool(getattr(settings, "sqlite_auto_migrate", False)),
+        "resolved_database_url": _resolved_database_url(),
+        "sqlite_auto_migrate": bool(_env_bool("SQLITE_AUTO_MIGRATE", True)),
     }
 
 
@@ -141,50 +213,22 @@ def db_runtime_snapshot() -> dict:
 # Model registry
 # ---------------------------------------------------------------------
 
+
 def register_models() -> None:
     """
     Central place to import ALL models so SQLModel registers them.
-    Prevents 'no such table' issues as the project grows.
-
-    Keep this list current as you add features.
     """
-    # Core models
-    from .models.person import Person  # noqa: F401
-    from .models.power_team import PowerTeam, PowerTeamMember  # noqa: F401
-    from .models.voter import VoterContact  # noqa: F401
-    from .models.event import Event  # noqa: F401
-
-    # County context
-    from .models.county import County  # noqa: F401
-    from .models.county_snapshot import CountySnapshot  # noqa: F401
-    from .models.alice_county import AliceCounty  # noqa: F401
-
-    # Power of 5 workflows
-    from .models.power5_link import Power5Link  # noqa: F401
-    from .models.power5_invite import Power5Invite  # noqa: F401
-
-    # Impact Reach
-    from .models.impact_rule import ImpactRule  # noqa: F401
-    from .models.impact_action import ImpactAction  # noqa: F401
-    from .models.impact_reach_snapshot import ImpactReachSnapshot  # noqa: F401
-
-    # Approvals (Milestone 3 gating)
-    from .models.approval_request import ApprovalRequest  # noqa: F401
-
-    # Milestone 4: Training / SOP
-    from .models.training_module import TrainingModule  # noqa: F401
-    from .models.training_completion import TrainingCompletion  # noqa: F401
+    from . import models as _models  # noqa: F401
 
 
 # ---------------------------------------------------------------------
 # SQLite micro-migrations (ADD COLUMN only)
 # ---------------------------------------------------------------------
 
+
 def _sqlite_table_exists(session: Session, table: str) -> bool:
-    row = session.exec(
-        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
-        params={"name": table},
-    ).first()
+    stmt = text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name").bindparams(name=table)
+    row = session.exec(stmt).first()
     return bool(row)
 
 
@@ -192,7 +236,6 @@ def _sqlite_get_columns(session: Session, table: str) -> List[str]:
     cols: List[str] = []
     rows = session.exec(text(f"PRAGMA table_info({table});")).all()
     for r in rows:
-        # PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
         try:
             cols.append(str(r[1]))
         except Exception:
@@ -257,137 +300,149 @@ def _sqlite_backfill_if_possible(
 def _sqlite_auto_migrate() -> None:
     """
     SQLite-only, local-dev convenience to add missing columns in-place.
+    Conservative: only ADD COLUMN and optional backfills.
 
-    This is intentionally conservative:
-    - only ADD COLUMN operations
-    - optional backfills (no drops/renames)
-    - gated behind settings.sqlite_auto_migrate
+    Controlled by env SQLITE_AUTO_MIGRATE.
     """
-    if not getattr(settings, "sqlite_auto_migrate", False):
+    if not bool(_env_bool("SQLITE_AUTO_MIGRATE", True)):
         return
 
-    database_url = settings.resolved_database_url
+    database_url = _resolved_database_url()
     if not _is_sqlite(database_url):
         return
 
     with Session(engine) as session:
-        # ---- people ----
-        # New timestamp column (from Person model hardening)
+        # -----------------------------------------------------------------
+        # people  (root cause of your 500s was missing people.zip_code)
+        # -----------------------------------------------------------------
+        _sqlite_add_column_if_missing(session, table="people", column="email", ddl="email TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="phone", ddl="phone TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="discord_user_id", ddl="discord_user_id TEXT")
+
+        _sqlite_add_column_if_missing(session, table="people", column="onboarded_at", ddl="onboarded_at DATETIME")
+
+        _sqlite_add_column_if_missing(session, table="people", column="stage", ddl="stage TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="stage_locked", ddl="stage_locked BOOLEAN DEFAULT 0")
         _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="updated_at",
-            ddl="updated_at DATETIME",
+            session, table="people", column="stage_last_changed_at", ddl="stage_last_changed_at DATETIME"
+        )
+        _sqlite_add_column_if_missing(session, table="people", column="stage_changed_reason", ddl="stage_changed_reason TEXT")
+
+        # Geo placement
+        _sqlite_add_column_if_missing(session, table="people", column="zip_code", ddl="zip_code TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="region", ddl="region TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="county", ddl="county TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="city", ddl="city TEXT")
+        _sqlite_add_column_if_missing(session, table="people", column="precinct", ddl="precinct TEXT")
+
+        _sqlite_add_column_if_missing(
+            session, table="people", column="recruited_by_person_id", ddl="recruited_by_person_id INTEGER"
         )
 
-        # Canonical access booleans (if DB was created before these fields existed)
+        # Consent flags
+        _sqlite_add_column_if_missing(session, table="people", column="allow_tracking", ddl="allow_tracking BOOLEAN DEFAULT 1")
         _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="team_access",
-            ddl="team_access BOOLEAN DEFAULT 0",
+            session, table="people", column="allow_discord_comms", ddl="allow_discord_comms BOOLEAN DEFAULT 1"
         )
         _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="fundraising_access",
-            ddl="fundraising_access BOOLEAN DEFAULT 0",
-        )
-        _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="leader_access",
-            ddl="leader_access BOOLEAN DEFAULT 0",
+            session, table="people", column="allow_leaderboard", ddl="allow_leaderboard BOOLEAN DEFAULT 1"
         )
 
-        # Discord last-seen fields (forward compatible; harmless if already present)
+        # Access flags
+        _sqlite_add_column_if_missing(session, table="people", column="team_access", ddl="team_access BOOLEAN DEFAULT 0")
         _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="last_seen_discord_guild_id",
-            ddl="last_seen_discord_guild_id TEXT",
+            session, table="people", column="fundraising_access", ddl="fundraising_access BOOLEAN DEFAULT 0"
+        )
+        _sqlite_add_column_if_missing(session, table="people", column="leader_access", ddl="leader_access BOOLEAN DEFAULT 0")
+        _sqlite_add_column_if_missing(session, table="people", column="is_admin", ddl="is_admin BOOLEAN DEFAULT 0")
+
+        # Discord audit
+        _sqlite_add_column_if_missing(
+            session, table="people", column="last_seen_discord_guild_id", ddl="last_seen_discord_guild_id TEXT"
         )
         _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="last_seen_discord_channel_id",
-            ddl="last_seen_discord_channel_id TEXT",
+            session, table="people", column="last_seen_discord_channel_id", ddl="last_seen_discord_channel_id TEXT"
         )
         _sqlite_add_column_if_missing(
-            session,
-            table="people",
-            column="last_seen_discord_username",
-            ddl="last_seen_discord_username TEXT",
+            session, table="people", column="last_seen_discord_username", ddl="last_seen_discord_username TEXT"
         )
 
-        # ---- power_team_members ----
-        # Standardize member FK to person_id (backfill from prior column if it exists)
-        _sqlite_add_column_if_missing(
-            session,
-            table="power_team_members",
-            column="person_id",
-            ddl="person_id INTEGER",
-        )
-        _sqlite_backfill_if_possible(
-            session,
-            table="power_team_members",
-            dst_col="person_id",
-            src_col="member_person_id",
-        )
+        # Timestamps
+        _sqlite_add_column_if_missing(session, table="people", column="created_at", ddl="created_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="people", column="updated_at", ddl="updated_at DATETIME")
 
-        # ---- power5_invites ----
-        _sqlite_add_column_if_missing(
-            session,
-            table="power5_invites",
-            column="invitee_person_id",
-            ddl="invitee_person_id INTEGER",
-        )
+        # -----------------------------------------------------------------
+        # power_teams
+        # -----------------------------------------------------------------
+        _sqlite_add_column_if_missing(session, table="power_teams", column="name", ddl="name TEXT")
+        _sqlite_add_column_if_missing(session, table="power_teams", column="min_goal_size", ddl="min_goal_size INTEGER")
+        _sqlite_add_column_if_missing(session, table="power_teams", column="created_at", ddl="created_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power_teams", column="updated_at", ddl="updated_at DATETIME")
 
-        # ---- voter_contacts ----
-        # If older DB lacked updated_at
+        # -----------------------------------------------------------------
+        # power_team_members
+        # -----------------------------------------------------------------
+        _sqlite_add_column_if_missing(session, table="power_team_members", column="person_id", ddl="person_id INTEGER")
+        _sqlite_backfill_if_possible(session, table="power_team_members", dst_col="person_id", src_col="member_person_id")
+        _sqlite_add_column_if_missing(session, table="power_team_members", column="joined_at", ddl="joined_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power_team_members", column="updated_at", ddl="updated_at DATETIME")
+
+        # -----------------------------------------------------------------
+        # power5_invites
+        # -----------------------------------------------------------------
         _sqlite_add_column_if_missing(
-            session,
-            table="voter_contacts",
-            column="updated_at",
-            ddl="updated_at DATETIME",
+            session, table="power5_invites", column="invitee_person_id", ddl="invitee_person_id INTEGER"
         )
+        _sqlite_add_column_if_missing(session, table="power5_invites", column="channel", ddl="channel TEXT")
+        _sqlite_add_column_if_missing(session, table="power5_invites", column="destination", ddl="destination TEXT")
+        _sqlite_add_column_if_missing(session, table="power5_invites", column="token_hash", ddl="token_hash TEXT")
+        _sqlite_add_column_if_missing(session, table="power5_invites", column="expires_at", ddl="expires_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power5_invites", column="consumed_at", ddl="consumed_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power5_invites", column="created_at", ddl="created_at DATETIME")
+
+        # -----------------------------------------------------------------
+        # power5_links
+        # -----------------------------------------------------------------
+        _sqlite_add_column_if_missing(session, table="power5_links", column="depth", ddl="depth INTEGER")
+        _sqlite_add_column_if_missing(session, table="power5_links", column="status", ddl="status TEXT")
+        _sqlite_add_column_if_missing(session, table="power5_links", column="invited_at", ddl="invited_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power5_links", column="onboarded_at", ddl="onboarded_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power5_links", column="activated_at", ddl="activated_at DATETIME")
+        _sqlite_add_column_if_missing(session, table="power5_links", column="created_at", ddl="created_at DATETIME")
+
+        # -----------------------------------------------------------------
+        # voter_contacts
+        # -----------------------------------------------------------------
+        _sqlite_add_column_if_missing(session, table="voter_contacts", column="updated_at", ddl="updated_at DATETIME")
 
 
 # ---------------------------------------------------------------------
 # Public init + session helpers
 # ---------------------------------------------------------------------
 
+
 def init_db(create_tables: bool = True) -> None:
     """
     Register models, then create missing tables (SQLite/local dev).
-    Non-destructive: create_all will not drop or alter existing tables.
-
-    When you switch to Postgres + Alembic:
-      - call init_db(create_tables=False) in production startup
-      - run Alembic migrations separately
+    create_all is non-destructive (won't alter existing tables),
+    so we also run conservative SQLite auto-migrations when enabled.
     """
     register_models()
     if create_tables:
         SQLModel.metadata.create_all(engine)
-
-    # SQLite-only convenience migrations
     _sqlite_auto_migrate()
 
 
 def get_session() -> Session:
     """
     Simple session factory (OK for scripts).
-    For FastAPI routes, prefer the yield-dependency `get_db()`.
     """
     return Session(engine)
 
 
 def get_db() -> Generator[Session, None, None]:
     """
-    FastAPI dependency:
-        def route(db: Session = Depends(get_db)):
-            ...
-    Ensures the session is closed after each request.
+    FastAPI dependency session.
     """
     with Session(engine) as session:
         yield session
@@ -397,10 +452,6 @@ def get_db() -> Generator[Session, None, None]:
 def session_scope() -> Generator[Session, None, None]:
     """
     Context manager for scripts/jobs that need commit/rollback safety.
-
-    Usage:
-        with session_scope() as db:
-            db.add(...)
     """
     session = Session(engine)
     try:

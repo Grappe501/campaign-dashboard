@@ -1207,3 +1207,28 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 
+## Power of 5 — Leader-Friendly Invites + Trust-Safe Private UX
+
+### What shipped
+- Added leader-friendly API endpoints so the UX never needs a `power_team_id` to start:
+  - `POST /power5/invites/create` (creates/gets leader’s team, returns token once)
+  - `POST /power5/invites/claim` (consumes token + best-effort creates link inviter→invitee)
+- Hardened invite/team creation for race safety (handles uniqueness + IntegrityError).
+- Centralized model registry (`app/models/__init__.py`) to ensure SQLModel table registration.
+- Database engine lifecycle + optional SQLite micro-migrations for safe local dev evolution.
+- Discord bot: `/power_of_5` private (ephemeral) step-by-step flow with in-memory capture:
+  - mark self status checked
+  - add/view Power Team members
+  - add/view registration support notes
+  - create invite token (no server invites, no DMs)
+  - claim invite token
+
+### Files touched
+- `app/api/power5.py`
+- `app/models/__init__.py`
+- `app/database.py`
+- `bot/commands/power_of_5.py` (or your equivalent command module)
+
+### Notes
+- Private-by-default UX: no public posting, no automatic DMs, no Discord server invite creation.
+- Next: persist captured Power-of-5 notes to DB via new endpoints (optional), and add onboarding routing to the `#voter-registration` room UX.

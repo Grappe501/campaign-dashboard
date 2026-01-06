@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Keep API payload timezone-naive for backend consistency
 def _utcnow_naive() -> datetime:
-    # Keep API payload timezone-naive for backend consistency
     return datetime.utcnow().replace(tzinfo=None)
 
 
@@ -48,6 +48,20 @@ def _safe_int(v: Optional[int]) -> Optional[int]:
     except Exception:
         return None
     return i if i >= 0 else None
+
+
+def format_log_suggestion(action_type: str, quantity: int = 1) -> str:
+    """
+    A consistent short suggestion string we can reuse in wins automation replies.
+    Keep it simple and copy/pasteable.
+    """
+    at = (action_type or "").strip()
+    qty = int(quantity or 1)
+    if qty < 1:
+        qty = 1
+    if not at:
+        at = "call"
+    return f"/log action_type:{at} quantity:{qty}"
 
 
 def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
@@ -89,17 +103,27 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
 
         at = _clean_str(action_type, 80)
         if not at:
-            await interaction.followup.send("❌ action_type is required (e.g., call, text, door).", ephemeral=True)
+            await interaction.followup.send(
+                "❌ action_type is required (example: `call`, `text`, `door`, `event_attended`).",
+                ephemeral=True,
+            )
             return
 
         # Default actor_person_id to the Discord user if not supplied (best-effort).
         linked_person_id: Optional[int] = None
+        link_warning: Optional[str] = None
+
         if actor_person_id is None:
-            pid, _, err = await ensure_person_by_discord(bot, interaction)
-            if err is None and pid is not None:
-                linked_person_id = pid
-                actor_person_id = pid
-            # If linking fails, proceed; backend may accept missing actor_person_id.
+            try:
+                pid, _, err = await ensure_person_by_discord(bot, interaction)
+                if err is None and pid is not None:
+                    linked_person_id = pid
+                    actor_person_id = pid
+                else:
+                    # We can still log without actor_person_id, but tell them how to fix once.
+                    link_warning = "⚠️ I couldn’t link you to a Person record yet. Run **/sync_me** once to connect your Discord to the dashboard."
+            except Exception:
+                link_warning = "⚠️ I couldn’t link you to a Person record yet. Run **/sync_me** once to connect your Discord to the dashboard."
 
         dt, dt_ok = parse_iso_dt(occurred_at)
         forced_now = False
@@ -112,6 +136,7 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         qty, qty_warn = clamp_quantity(int(quantity or 1))
 
         guild_id = interaction.guild_id
+        # idempotency should be unique per interaction. Include guild + interaction id.
         idem = f"discord:{guild_id}:{interaction.id}"
 
         meta: Dict[str, Any] = {
@@ -152,6 +177,8 @@ def register(bot: "discord.Client", tree: "app_commands.CommandTree") -> None:
         actor_stage = data.get("actor_stage")
 
         warnings: List[str] = []
+        if link_warning:
+            warnings.append(link_warning)
         if occurred_at and forced_now:
             warnings.append("⚠️ I couldn't parse your occurred_at date/time. Logged it as *now*.")
         if qty_warn:
